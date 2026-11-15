@@ -1,4 +1,7 @@
-"""Build notebooks/01_eda.ipynb from cell sources. Run: uv run python notebooks/build_eda.py"""
+"""Build notebooks/01_eda.ipynb from cell sources.
+
+Run: uv run python notebooks/build_eda.py && uv run jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb
+"""
 
 import json
 from pathlib import Path
@@ -27,7 +30,12 @@ con = duckdb.connect()
 con.execute("SET TimeZone = 'UTC'")
 con.execute("SET enable_progress_bar = false")
 DEV = f"read_parquet('{(RELEASE / 'station_hours_dev.parquet').as_posix()}')"
-EDA = f"(SELECT * FROM {DEV} WHERE date_local <= DATE '{config.EDA_END}')"
+CAL = f"read_parquet('{(RELEASE / 'calendar.parquet').as_posix()}')"
+# The repeated 01:00 hour of fall-back nights has no pickups by construction; treat it like inactive hours.
+EDA = f"""(SELECT * EXCLUDE (status), CASE WHEN status = 'observed' AND hour_utc IN (
+            SELECT hour_utc FROM {CAL} WHERE hour_local = 1 AND local_hours_in_day = 25 AND utc_offset_h = -5)
+          THEN 'dst_repeat' ELSE status END AS status
+       FROM {DEV} WHERE date_local <= DATE '{config.EDA_END}')"""
 
 def save(fig, name):
     fig.tight_layout()
@@ -178,7 +186,7 @@ observed = pd.read_parquet(RELEASE / "weather_observed.parquet")
 observed["date_local"] = observed["hour_utc"].dt.tz_convert(config.TIMEZONE).dt.tz_localize(None).dt.normalize()
 weather_day = observed.groupby("date_local").agg(temperature=("temperature_2m", "mean"), precipitation=("precipitation", "sum"))
 days = daily.merge(weather_day, left_on="date_local", right_index=True)
-days["rain"] = pd.cut(days["precipitation"], [-0.1, 0.1, 5, 1000], labels=["dry (<0.1 mm)", "0.1-5 mm", ">5 mm"])
+days["rain"] = pd.cut(days["precipitation"], [-0.1, 0.1, 5, 1000], labels=["dry (<=0.1 mm)", "0.1-5 mm", ">5 mm"])
 fig, ax = plt.subplots(1, 2, figsize=(10, 3.6))
 ax[0].scatter(days["temperature"], days["trips"] / 1000, s=5, c=days["date_local"].dt.year, cmap="viridis")
 ax[0].set_xlabel("daily mean temperature (deg C, ERA5)"); ax[0].set_ylabel("trips per day (thousands)")
@@ -235,7 +243,7 @@ print(monthly_mix[["ebike_share", "member_share"]].round(3).iloc[[0, 6, 12, 18, 
 
 INTRO = """# PedalPulse: exploratory data analysis
 
-Data: release `data-v1`, file `station_hours_dev.parquet` and the daily system totals, restricted to local dates up to 2025-06-30. The holdout file is not read. Counts are pickups per cohort station and UTC hour; hours with `status = inactive` are left out of the averages unless stated otherwise. Weather in this notebook is observed ERA5 weather and is only descriptive.
+Data: release `data-v2`, file `station_hours_dev.parquet` and the daily system totals, restricted to local dates up to 2025-06-30. The holdout file is not read. Counts are pickups per cohort station and UTC hour; hours with `status = inactive` and the repeated 01:00 hour of fall-back nights (`dst_repeat`) are left out of the averages unless stated otherwise. Weather in this notebook is observed ERA5 weather and is only descriptive.
 """
 
 

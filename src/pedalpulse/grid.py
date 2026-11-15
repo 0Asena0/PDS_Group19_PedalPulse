@@ -11,6 +11,7 @@ from .stations import STATIONS_BASE
 
 GRID_DIR = "grid"
 INACTIVE_DAYS = "inactive_days.parquet"
+DONE_MARKER = "_COMPLETE"
 
 
 def register_inputs(con) -> None:
@@ -24,7 +25,10 @@ def register_inputs(con) -> None:
     calendar = sql_path(config.PROCESSED_DIR / "calendar.parquet")
     con.execute(f"""
         CREATE OR REPLACE TEMP TABLE hours AS
-        SELECT hour_utc::TIMESTAMP AS hour_utc, date_local, hour_local FROM read_parquet('{calendar}')
+        SELECT hour_utc::TIMESTAMP AS hour_utc, date_local, hour_local,
+               -- second occurrence of 01:00-01:59 on fall-back nights; trip starts are assigned to the first
+               (hour_local = 1 AND local_hours_in_day = 25 AND utc_offset_h = -5) AS is_repeated_hour
+        FROM read_parquet('{calendar}')
     """)
     for kind in ("pickups", "dropoffs"):
         source = sql_path(config.PROCESSED_DIR / kind / "*.parquet")
@@ -37,7 +41,10 @@ def register_inputs(con) -> None:
 
 
 def build_inactive_days(con) -> None:
-    """Local days that belong to a run of >= INACTIVE_MIN_DAYS days without any pickup or dropoff."""
+    """Local days that belong to a run of >= INACTIVE_MIN_DAYS days without any pickup or dropoff.
+
+    Runs do not cross the dev/holdout boundary, so the status of a development hour never depends on holdout data.
+    """
     con.execute(f"""
         CREATE OR REPLACE TEMP TABLE inactive_days AS
         WITH activity AS (
@@ -55,15 +62,17 @@ def build_inactive_days(con) -> None:
         ),
         empty AS (
             SELECT d.station_id, d.date_local,
-                   d.date_local - CAST(row_number() OVER (PARTITION BY d.station_id ORDER BY d.date_local) AS INTEGER) AS run_id
+                   d.date_local >= DATE '{config.HOLDOUT_START}' AS in_holdout,
+                   d.date_local - CAST(row_number() OVER (PARTITION BY d.station_id, d.date_local >= DATE '{config.HOLDOUT_START}'
+                                                          ORDER BY d.date_local) AS INTEGER) AS run_id
             FROM days d LEFT JOIN activity a USING (station_id, date_local)
             WHERE coalesce(a.trips, 0) = 0
         ),
         runs AS (
-            SELECT station_id, run_id, count(*) AS run_days FROM empty GROUP BY ALL
+            SELECT station_id, in_holdout, run_id, count(*) AS run_days FROM empty GROUP BY ALL
         )
         SELECT e.station_id, e.date_local, r.run_days
-        FROM empty e JOIN runs r USING (station_id, run_id)
+        FROM empty e JOIN runs r USING (station_id, in_holdout, run_id)
         WHERE r.run_days >= {config.INACTIVE_MIN_DAYS}
     """)
 
@@ -82,7 +91,9 @@ def write_chunk(con, month_start, first_hour, last_hour) -> None:
             SELECT m.station_id, h.hour_utc, h.date_local, h.hour_local,
                    coalesce(p.pickups, 0) AS pickups,
                    coalesce(d.dropoffs, 0) AS dropoffs,
-                   CASE WHEN i.station_id IS NULL THEN 'observed' ELSE 'inactive' END AS status
+                   CASE WHEN i.station_id IS NOT NULL THEN 'inactive'
+                        WHEN h.is_repeated_hour THEN 'dst_repeat'
+                        ELSE 'observed' END AS status
             FROM members m
             JOIN hours h ON h.hour_utc >= m.first_hour
             LEFT JOIN pickups p ON p.station_id = m.station_id AND p.hour_utc = h.hour_utc
@@ -96,7 +107,7 @@ def write_chunk(con, month_start, first_hour, last_hour) -> None:
 
 def build_grid(force: bool = False) -> None:
     grid_dir = config.PROCESSED_DIR / GRID_DIR
-    if grid_dir.exists() and any(grid_dir.iterdir()) and not force:
+    if (grid_dir / DONE_MARKER).exists() and not force:
         print("skip grid (done)")
         return
     shutil.rmtree(grid_dir, ignore_errors=True)
@@ -109,4 +120,6 @@ def build_grid(force: bool = False) -> None:
         write_chunk(con, month_start, first_hour, last_hour)
     rows = con.execute(f"SELECT count(*) FROM read_parquet('{sql_path(grid_dir / '*.parquet')}')").fetchone()[0]
     con.close()
+    # Written last: an interrupted build leaves no marker and is rebuilt from scratch on the next run.
+    (grid_dir / DONE_MARKER).write_text(f"{rows}\n")
     print(f"grid: {rows:,} station-hours")

@@ -19,12 +19,13 @@ SPLITS = {
 CALENDAR_COLUMNS = ["weekday", "month", "is_weekend", "is_holiday", "is_federal_holiday", "is_dst_change_day", "origin_utc"]
 WEATHER_COLUMNS = ["temperature_2m", "precipitation", "wind_speed_10m", "cloud_cover"]
 # data-v1 contains 19 forecast values just outside the physical range (cloud cover -1 or 101 %, precipitation -0.1 mm),
-# rounding artefacts of the weather models. The loader clips them so every user gets the same values.
+# rounding artefacts of the weather models. data-v2 is clipped at export; the loader clips too, so both versions agree.
 WEATHER_SQL = {
     "temperature_2m": "w.temperature_2m",
-    "precipitation": "greatest(w.precipitation, 0) AS precipitation",
-    "wind_speed_10m": "greatest(w.wind_speed_10m, 0) AS wind_speed_10m",
-    "cloud_cover": "least(greatest(w.cloud_cover, 0), 100) AS cloud_cover",
+    # CASE keeps missing values missing; DuckDB's greatest/least would turn NULL into the bound.
+    "precipitation": "CASE WHEN w.precipitation < 0 THEN 0 ELSE w.precipitation END AS precipitation",
+    "wind_speed_10m": "CASE WHEN w.wind_speed_10m < 0 THEN 0 ELSE w.wind_speed_10m END AS wind_speed_10m",
+    "cloud_cover": "CASE WHEN w.cloud_cover < 0 THEN 0 WHEN w.cloud_cover > 100 THEN 100 ELSE w.cloud_cover END AS cloud_cover",
 }
 
 
@@ -49,7 +50,14 @@ def load_station_hours(
     """Station-hours of one split, optionally filtered by station and local date (inclusive)."""
     if split not in SPLITS:
         raise ValueError(f"split must be one of {sorted(SPLITS)}")
-    select = ["s.*"]
+    # data-v1 marks the repeated 01:00 hour of fall-back nights as 'observed', but no pickup can fall into it
+    # (all starts in 01:00-01:59 are assigned to the first occurrence). The loader labels it 'dst_repeat'.
+    calendar = release_path("calendar.parquet", release_dir)
+    status = f"""CASE WHEN s.status = 'observed' AND s.hour_utc IN (
+            SELECT hour_utc FROM read_parquet('{calendar}')
+            WHERE hour_local = 1 AND local_hours_in_day = 25 AND utc_offset_h = -5)
+        THEN 'dst_repeat' ELSE s.status END"""
+    select = ["s.* EXCLUDE (status)", f"{status} AS status"]
     joins = []
     if with_calendar:
         select += [f"c.{col}" for col in CALENDAR_COLUMNS]
@@ -68,7 +76,7 @@ def load_station_hours(
         where.append("s.date_local <= ?::DATE")
         params.append(end_local)
     if observed_only:
-        where.append("s.status = 'observed'")
+        where.append(f"({status}) = 'observed'")
     query = f"""
         SELECT {', '.join(select)}
         FROM read_parquet('{release_path(SPLITS[split], release_dir)}') s

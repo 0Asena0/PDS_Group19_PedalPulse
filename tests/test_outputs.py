@@ -149,7 +149,7 @@ def test_inactive_status_only_on_days_without_trips(con):
         )
     """).fetchone()[0]
     assert busy_inactive_days == 0
-    assert set(r[0] for r in con.execute(f"SELECT DISTINCT status FROM {dev}").fetchall()) <= {"observed", "inactive"}
+    assert set(r[0] for r in con.execute(f"SELECT DISTINCT status FROM {dev}").fetchall()) <= {"observed", "inactive", "dst_repeat"}
 
 
 def test_daily_system_has_every_study_day():
@@ -170,3 +170,35 @@ def test_checksums_match():
     for line in filter(None, sums):
         digest, name = line.split("  ")
         assert hashlib.sha256((config.RELEASE_DIR / name).read_bytes()).hexdigest() == digest, name
+
+
+def test_repeated_fall_back_hour_has_no_pickups_and_no_trip_crosses_it_backwards(con):
+    for split in ("station_hours_dev.parquet", "station_hours_holdout.parquet"):
+        frame = parquet(release_file(split))
+        calendar = parquet(release_file("calendar.parquet"))
+        wrong = con.execute(f"""
+            SELECT count(*) FILTER (WHERE s.status = 'dst_repeat' AND s.pickups > 0),
+                   count(*) FILTER (WHERE s.status = 'observed' AND c.hour_local = 1
+                                    AND c.local_hours_in_day = 25 AND c.utc_offset_h = -5)
+            FROM {frame} s JOIN {calendar} c USING (hour_utc)
+        """).fetchone()
+        assert wrong == (0, 0), split
+    log = pd.read_parquet(release_file("filter_log.parquet"))
+    assert log["end_before_start"].sum() == 0
+
+
+def test_inactive_runs_end_at_the_split_date(con):
+    """Each side of the split needs its own run of at least INACTIVE_MIN_DAYS empty days next to the boundary."""
+    n = config.INACTIVE_MIN_DAYS
+    checks = (("station_hours_dev.parquet", config.DEV_END, -1), ("station_hours_holdout.parquet", config.HOLDOUT_START, 1))
+    for name, boundary, step in checks:
+        frame = parquet(release_file(name))
+        lo, hi = sorted((boundary, boundary + pd.Timedelta(days=step * (n - 1))))
+        short = con.execute(f"""
+            SELECT count(*) FROM (
+                SELECT station_id, count(DISTINCT date_local) FILTER (WHERE status = 'inactive') AS days
+                FROM {frame} WHERE date_local BETWEEN DATE '{lo}' AND DATE '{hi}'
+                GROUP BY 1 HAVING bool_or(status = 'inactive' AND date_local = DATE '{boundary}'))
+            WHERE days < {n}
+        """).fetchone()[0]
+        assert short == 0, name
