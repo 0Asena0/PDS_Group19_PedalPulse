@@ -19,7 +19,7 @@ DUCKDB_TEMP_DIR = DATA_DIR / "duckdb_tmp"
 REPORTS_DIR = REPO_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"
 
-DATA_VERSION = "data-v1"
+DATA_VERSION = "data-v2"
 TIMEZONE = "America/New_York"
 
 TRIP_BUCKET_URL = "https://s3.amazonaws.com/tripdata"

@@ -8,10 +8,10 @@ Setup (needs [uv](https://docs.astral.sh/uv/) and, for the download, the GitHub 
 ```bash
 git clone https://github.com/0Asena0/PDS_Group19_PedalPulse.git && cd PDS_Group19_PedalPulse
 uv sync
-gh release download data-v1 --dir data/release
+gh release download data-v2 --dir data/release
 ```
 
-Without `gh`, download the files from the release `data-v1` in the browser and put them into `data/release/`. Without uv, use `pip install -r requirements.txt` and then `pip install -e .` in a Python 3.12 environment. Check the files with `uv run python -m pedalpulse verify` (works on Windows too).
+Without `gh`, download the files from the release `data-v2` in the browser and put them into `data/release/`. Without uv, use `pip install -r requirements.txt` and then `pip install -e .` in a Python 3.12 environment. Check the files with `uv run python -m pedalpulse verify` (works on Windows too).
 
 Load the laptop file:
 
@@ -34,21 +34,23 @@ Splits are `sample`, `dev` and `holdout`. The full `dev` split with all columns 
 
 Columns, types and rules are in [`docs/data_contract.md`](docs/data_contract.md). Work only against this contract. EDA and all modelling decisions use `station_hours_dev`; `station_hours_holdout` is for the final evaluation only.
 
-## Data files (release data-v1)
+## Data files (release data-v2)
+
+`data-v2` replaces `data-v1` (decision E16): it keeps the 1,123 trips across the repeated fall-back hour, stores that hour as `dst_repeat`, ends inactive runs at the split date and clips the 19 out-of-range forecast values. Use `data-v2` for all new work.
 
 | file | content | rows | size | SHA-256 (first 12) |
 |---|---|---:|---:|---|
-| `station_hours_dev.parquet` | cohort station by UTC hour, 2023-01 to 2025-09 | 47,122,121 | 167.5 MB | `73267eb7b480` |
-| `station_hours_holdout.parquet` | cohort station by UTC hour, 2025-10 to 2026-03 | 9,050,496 | 8.8 MB | `6d0fe2610c96` |
+| `station_hours_dev.parquet` | cohort station by UTC hour, 2023-01 to 2025-09 | 47,122,121 | 167.5 MB | `b4443af43b51` |
+| `station_hours_holdout.parquet` | cohort station by UTC hour, 2025-10 to 2026-03 | 9,050,496 | 8.8 MB | `5be2096eb662` |
 | `dev_sample_manhattan_2024_summer.parquet` | Manhattan cohort, 2024-06 to 2024-08 | 1,432,053 | 2.0 MB | `e2a75ad902b6` |
-| `stations.parquet` | station metadata and cohort flag | 2,478 | 0.1 MB | `c2e646040046` |
+| `stations.parquet` | station metadata and cohort flag | 2,478 | 0.1 MB | `0891c870a37e` |
 | `cohort.csv` | frozen cohort with rule and cutoff | 2,072 | 0.4 MB | `796add1cf826` |
-| `station_name_changes.parquet` | ID and name changes | 226 | < 0.1 MB | `a04b4cf2d9cb` |
+| `station_name_changes.parquet` | ID and name changes | 226 | < 0.1 MB | `405b56a61e08` |
 | `calendar.parquet` | calendar per UTC hour | 28,463 | 0.5 MB | `55e9c6beb601` |
-| `weather_forecast.parquet` | day-ahead forecast, Central Park | 28,463 | 0.8 MB | `9ccb21e30701` |
+| `weather_forecast.parquet` | day-ahead forecast, Central Park | 28,463 | 0.8 MB | `5adf5484314c` |
 | `weather_observed.parquet` | observed weather (ERA5), EDA only | 28,463 | 0.3 MB | `59fd76c0dada` |
-| `daily_system.parquet` | daily totals over all stations | 1,186 | < 0.1 MB | `3d9c8128f01d` |
-| `filter_log.parquet` | cleaning counts per month | 39 | < 0.1 MB | `5c9fcf797f22` |
+| `daily_system.parquet` | daily totals over all stations | 1,186 | < 0.1 MB | `c0c5dd82d649` |
+| `filter_log.parquet` | cleaning counts per month | 39 | < 0.1 MB | `2f967d2ed51a` |
 
 Full checksums are in `SHA256SUMS` in the release. Sources, download dates and archive checksums: [`data/manifest.csv`](data/manifest.csv).
 

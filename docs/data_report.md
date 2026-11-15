@@ -1,4 +1,4 @@
-# Data quality report (data-v1)
+# Data quality report (data-v2)
 
 All numbers come from the pipeline run on 2026-11-15 and are reproduced by `uv run python -m pedalpulse report`, which writes them to `reports/data_summary.json`.
 
@@ -6,11 +6,11 @@ All numbers come from the pipeline run on 2026-11-15 and are reproduced by `uv r
 
 | year | raw trips | kept trips | dropped |
 |---|---:|---:|---:|
-| 2023 | 35,106,986 | 35,088,190 | 18,796 |
-| 2024 | 44,303,209 | 44,273,056 | 30,153 |
-| 2025 | 45,771,102 | 45,750,349 | 20,753 |
+| 2023 | 35,106,986 | 35,088,513 | 18,473 |
+| 2024 | 44,303,209 | 44,273,374 | 29,835 |
+| 2025 | 45,771,102 | 45,750,831 | 20,271 |
 | 2026 (Jan to Mar) | 5,981,588 | 5,977,495 | 4,093 |
-| total | 131,162,885 | 131,089,090 | 73,795 |
+| total | 131,162,885 | 131,090,213 | 72,672 |
 
 The years are file months. 20,682 kept trips appear in the file of a later month than their start, for example trips from late February 2026 in the March 2026 file; they are kept and counted in the hour they started.
 
@@ -21,18 +21,18 @@ Cleaning removed 0.06 % of the raw rows:
 | duplicate `ride_id` | 0 |
 | missing start station | 72,397 |
 | unparsable start or end time | 0 |
-| end before start | 1,123 |
+| end before start | 0 |
 | start outside the study period | 275 |
 
 The 275 trips outside the period are in the January 2023 file and started in December 2022.
 
-All 1,123 trips dropped as "end before start" lie in the repeated 01:00 hour of a fall-back night (323 in November 2023, 318 in November 2024, 482 in November 2025). They start in the first and end in the second 01:00 hour, so their local end time is earlier than the start; they are valid trips, not data errors. `data-v1` drops them. The pipeline now keeps them (decision E15); the effect is 0.0009 % of all trips.
+1,123 trips start in the first and end in the second 01:00 hour of a fall-back night (323 in November 2023, 318 in November 2024, 482 in November 2025), so their local end time is earlier than the start. They are valid trips and are kept with the end moved to the second occurrence. `data-v1` had dropped them as "end before start" (decision E15).
 
 Kept trips that need care:
 
-- 347,032 trips (0.26 %) have no end station. They count as pickups and do not appear in `dropoffs`.
-- 3,077,947 trips had a station ID written in a second format (`6313.1` for `6313.10`, or a trailing underscore) and were mapped to the operator's format.
-- 9,441 trips started in the repeated hour of a fall-back night and were assigned to its first occurrence (EDT). The second occurrence therefore has zero pickups at every station (6,069 rows, 5,871 of them `observed` in `data-v1`); the loader labels them `dst_repeat`. No trip time falls into the non-existent spring-forward hour.
+- 347,033 trips (0.26 %) have no end station. They count as pickups and do not appear in `dropoffs`.
+- 3,077,965 trips had a station ID written in a second format (`6313.1` for `6313.10`, or a trailing underscore) and were mapped to the operator's format.
+- 10,564 trips started in the repeated hour of a fall-back night and were assigned to its first occurrence (EDT). The second occurrence therefore has zero pickups at every station; these 5,871 rows have `status = dst_repeat`. No trip time falls into the non-existent spring-forward hour.
 
 Duration sensitivity: 48,661 kept trips (0.037 %) last less than 1 minute or more than 24 hours, almost all of them more than 24 hours; only 5 trips are shorter than a minute. A 1 minute to 24 hour filter would therefore change the hourly counts very little. The default keeps all of them.
 
@@ -57,7 +57,7 @@ Sum check: for each of the 39 months, raw rows equal kept rows plus the dropped 
 | `station_hours_holdout` | 9,050,496 | 2,072 | 2025-10-01 04:00 | 2026-04-01 03:00 | 8.8 MB |
 | `dev_sample_manhattan_2024_summer` | 1,432,053 | 651 | 2024-06-01 | 2024-08-31 (local) | 2.0 MB |
 
-- Inactive hours: 1.36 % of the dev rows and 4.47 % of the holdout rows. 1,063 cohort stations have at least one inactive run; together these runs cover 43,623 station-days. 67 runs cross the split date. Only one of them changes development labels: station `7935.07` is `inactive` on 2025-09-30 (24 dev rows) only because the empty run continues into October. Ending runs at the split date also changes 48 holdout rows (station `4354.05`, 1 to 2 October 2025). Later builds end runs at the split date (E15).
+- Inactive hours: 1.36 % of the dev rows and 4.47 % of the holdout rows. 1,063 cohort stations have at least one inactive run; together these runs cover 43,623 station-days. Runs end at the split date. Against `data-v1` this changes 24 dev rows (station `7935.07`, 2025-09-30) and 48 holdout rows (station `4354.05`, 1 to 2 October 2025) from `inactive` to `observed`.
 - In the holdout the inactive share rises from 3.6 % in October 2025 to 6.3 % in February 2026. 41 cohort stations are inactive for the whole of March 2026 and may have closed; this cannot be checked from the trip files.
 - Share of observed hours with zero pickups: 48.2 % in dev and 55.7 % in holdout, which covers only autumn and winter months.
 - Pickups per observed station-hour in dev: median 1, 99th percentile 22, maximum 216.

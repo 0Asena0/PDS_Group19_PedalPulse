@@ -1,6 +1,6 @@
-# Data contract (data-v1)
+# Data contract (data-v2)
 
-This contract describes the files in the GitHub release `data-v1`. Modelling (Asena) and the app and extensions (Sandra) work only against these files and columns. Changes to columns, types or rules require a new data version.
+This contract describes the files in the GitHub release `data-v2`, which replaces `data-v1` (decision E16). Modelling (Asena) and the app and extensions (Sandra) work only against these files and columns. Changes to columns, types or rules require a new data version.
 
 ## Conventions
 
@@ -22,8 +22,8 @@ Raw trip times are naive local wall-clock times. They are localised to America/N
 
 - Spring forward: local times 02:00 to 02:59 do not exist. They are read with the offset before the change and land at 03:00 to 03:59 EDT.
 - Fall back: local times 01:00 to 01:59 occur twice. They are assigned to the first occurrence (EDT, UTC-4), so the second occurrence (EST) receives no pickups. `tests/test_time.py` checks both rules.
-- Trips across the repeated hour: a trip that starts in the first and ends in the second 01:00 hour has a local end time before its start. In `data-v1` these trips were dropped as `end_before_start`: all 1,123 trips of that rule (323 in 2023, 318 in 2024, 482 in 2025) are of this kind, none is a data error. Since the commit after `data-v1`, the pipeline moves such an end to the second occurrence and keeps the trip (`tests/test_trips.py`).
-- In `data-v1` the second occurrence of 01:00 on the three fall-back nights is a structural zero for every station (6,069 rows, 5,871 of them `observed`). `load_station_hours` labels these rows `dst_repeat`, later builds store that status directly. Exclude them from training and evaluation like `inactive` rows.
+- Trips across the repeated hour: a trip that starts in the first and ends in the second 01:00 hour has a local end time before its start. The pipeline moves such an end to the second occurrence and keeps the trip (1,123 trips: 323 in 2023, 318 in 2024, 482 in 2025; `tests/test_trips.py`). `data-v1` had dropped them as `end_before_start`.
+- The second occurrence of 01:00 on the three fall-back nights has no pickups at any station by construction. These rows have `status = dst_repeat` (5,871 rows; hours of stations in an inactive run stay `inactive`). Their `dropoffs` contain only the trips that started in the first occurrence (1,099), so they are incomplete as well. Exclude them from training and evaluation like `inactive` rows; `observed_only=True` does this.
 
 Cleaning drops a trip only for: duplicate `ride_id`, missing start station, unparsable start or end time, end before start, start outside the study period. There is no duration filter. `filter_log.parquet` holds the count per rule and month.
 
@@ -41,14 +41,14 @@ One row per cohort station and UTC hour, from the station's first observed trip 
 | `hour_local` | int8 | local hour 0 to 23 |
 | `pickups` | int32 | trips starting at the station in this hour (target) |
 | `dropoffs` | int32 | trips ending at the station in this hour, by end time |
-| `status` | string | `observed` or `inactive`; `load_station_hours` and later builds add `dst_repeat` |
+| `status` | string | `observed`, `inactive` or `dst_repeat` |
 
 - `dev`: local dates 2023-01-01 to 2025-09-30. `holdout`: 2025-10-01 to 2026-03-31. The files do not overlap and together cover the full grid.
 - EDA and every modelling decision use only `dev`. Decisions about the sample itself (cohort, station attributes) use only data up to 2024-09-30.
 - `status = observed`: the count is real, including true zeros.
 - `status = inactive`: the hour lies on a local day that is part of a run of at least 3 consecutive local days without any pickup or dropoff at the station. These hours stay in the table so that the grid is complete.
-- `status = dst_repeat`: second occurrence of the repeated fall-back hour, zero by construction (see above).
-- In `data-v1` a run of empty days may cross the split date (67 runs). Development status depends on holdout data for one station-day: station `7935.07` on 2025-09-30 (24 development rows) is `inactive` only because the run continues into October. Later builds end every run at the split date, so development status never depends on holdout data.
+- `status = dst_repeat`: second occurrence of the repeated fall-back hour, no pickups by construction (see above).
+- Inactive runs end at the split date, so development status never depends on holdout data. Each side needs its own 3 empty days. (In `data-v1`, 24 development rows of station `7935.07` on 2025-09-30 were `inactive` only because the run continued into October.)
 - `status` is label cleaning, not a feature. It uses information from the whole run, including days after the hour, and must not be used as a model input. Use it to exclude or down-weight training and evaluation rows.
 - `pickups` and `dropoffs` of the target hour are labels. Neither is known at the origin. As features, only values of complete source hours are allowed (rule above, for example `lag_24h`); a same-hour `dropoffs` value is leakage. `load_station_hours` returns both columns, so the feature list must name allowed columns explicitly.
 - `dropoffs` of trips that end at or after 2026-04-01 04:00 UTC (the end of the last grid hour) are not counted. Trips that started in 2022 are outside the study period, so dropoffs in the first hours of 2023-01-01 are slightly too low.
@@ -113,7 +113,7 @@ One row per UTC hour of the study period.
 
 Day-ahead forecast for one point, Central Park (40.7812, -73.9665), from the Open-Meteo Previous Runs API with the `_previous_day2` lead. Units: degrees Celsius, mm, km/h, percent.
 
-In `data-v1`, 19 of 28,463 hours carry model values just outside the physical range: `cloud_cover` -1 (5 hours) or 101 (8 hours) and `precipitation` -0.1 (6 hours). These are rounding artefacts of the weather models. `load_station_hours` clips them to 0 to 100 percent and to at least 0 mm and keeps missing values missing; when reading the file directly, clip the same way. The pipeline clips them for later builds.
+The weather models return 19 of 28,463 hours with values just outside the physical range: `cloud_cover` -1 (5 hours) or 101 (8 hours) and `precipitation` -0.1 (6 hours), rounding artefacts. The export clips them to 0 to 100 percent and to at least 0 mm; missing values stay missing. `load_station_hours` applies the same clipping, so `data-v1` files give the same values.
 
 | column | type | meaning |
 |---|---|---|

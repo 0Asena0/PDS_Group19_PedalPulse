@@ -243,7 +243,7 @@ print(monthly_mix[["ebike_share", "member_share"]].round(3).iloc[[0, 6, 12, 18, 
 
 INTRO = """# PedalPulse: exploratory data analysis
 
-Data: release `data-v1`, file `station_hours_dev.parquet` and the daily system totals, restricted to local dates up to 2025-06-30. The holdout file is not read. Counts are pickups per cohort station and UTC hour; hours with `status = inactive` and the repeated 01:00 hour of fall-back nights (`dst_repeat`) are left out of the averages unless stated otherwise. Weather in this notebook is observed ERA5 weather and is only descriptive.
+Data: release `data-v2`, file `station_hours_dev.parquet` and the daily system totals, restricted to local dates up to 2025-06-30. The holdout file is not read. Counts are pickups per cohort station and UTC hour; hours with `status = inactive` and the repeated 01:00 hour of fall-back nights (`dst_repeat`) are left out of the averages unless stated otherwise. Weather in this notebook is observed ERA5 weather and is only descriptive.
 """
 
 

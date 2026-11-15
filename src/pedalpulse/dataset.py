@@ -19,7 +19,7 @@ SPLITS = {
 CALENDAR_COLUMNS = ["weekday", "month", "is_weekend", "is_holiday", "is_federal_holiday", "is_dst_change_day", "origin_utc"]
 WEATHER_COLUMNS = ["temperature_2m", "precipitation", "wind_speed_10m", "cloud_cover"]
 # data-v1 contains 19 forecast values just outside the physical range (cloud cover -1 or 101 %, precipitation -0.1 mm),
-# rounding artefacts of the weather models. The loader clips them so every user gets the same values.
+# rounding artefacts of the weather models. data-v2 is clipped at export; the loader clips too, so both versions agree.
 WEATHER_SQL = {
     "temperature_2m": "w.temperature_2m",
     # CASE keeps missing values missing; DuckDB's greatest/least would turn NULL into the bound.

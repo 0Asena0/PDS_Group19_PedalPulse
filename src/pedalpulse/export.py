@@ -1,4 +1,4 @@
-"""Write the release files (data-v1) and their SHA-256 checksums."""
+"""Write the release files and their SHA-256 checksums."""
 
 import hashlib
 import json
@@ -102,9 +102,26 @@ def export_filter_log() -> None:
     pd.DataFrame(rows).to_parquet(release_path("filter_log.parquet"), index=False, compression="zstd")
 
 
+# Physical bounds of the forecast variables. A few model values lie just outside them (rounding artefacts).
+WEATHER_BOUNDS = {"precipitation": (0, None), "wind_speed_10m": (0, None), "cloud_cover": (0, 100)}
+
+
+def export_weather_forecast() -> int:
+    """Copy the forecast weather, clipped to the physical range; missing values stay missing."""
+    weather = pd.read_parquet(config.PROCESSED_DIR / "weather_forecast.parquet")
+    clipped = 0
+    for column, (low, high) in WEATHER_BOUNDS.items():
+        before = weather[column].copy()
+        weather[column] = weather[column].clip(lower=low, upper=high)
+        clipped += int((before.notna() & (before != weather[column])).sum())
+    weather.to_parquet(release_path("weather_forecast.parquet"), index=False, compression="zstd")
+    return clipped
+
+
 def copy_processed() -> None:
-    for name in ("calendar.parquet", "weather_forecast.parquet", "weather_observed.parquet"):
+    for name in ("calendar.parquet", "weather_observed.parquet"):
         shutil.copy2(config.PROCESSED_DIR / name, release_path(name))
+    print(f"weather_forecast: {export_weather_forecast()} values clipped to the physical range")
     shutil.copy2(config.PROCESSED_DIR / NAME_CHANGES, release_path(NAME_CHANGES))
     shutil.copy2(config.TRACKED_DIR / COHORT_FILE, release_path(COHORT_FILE))
 

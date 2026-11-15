@@ -42,8 +42,8 @@ def test_loader_clips_forecast_to_physical_range():
     assert frame["cloud_cover"].between(0, 100).all()
     assert (frame["precipitation"] >= 0).all() and (frame["wind_speed_10m"] >= 0).all()
     raw = pd.read_parquet(config.RELEASE_DIR / "weather_forecast.parquet")
-    hours = set(frame["hour_utc"])
-    assert raw[raw["hour_utc"].isin(hours)]["cloud_cover"].lt(0).any()  # the raw file has such values in this range
+    assert raw["cloud_cover"].between(0, 100).all()  # from data-v2 the export clips as well
+    assert (raw["precipitation"] >= 0).all() and (raw["wind_speed_10m"] >= 0).all()
 
 
 def test_loader_weather_comes_from_the_forecast_file():

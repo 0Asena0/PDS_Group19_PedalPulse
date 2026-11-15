@@ -26,13 +26,13 @@ E11. Leakage protection by file split. The full table is split into `station_hou
 
 E12. Laptop file. Cohort stations in Manhattan, 2024-06-01 to 2024-08-31, below 50 MB, so that Asena and Sandra can work on their laptops without the full data.
 
-E13. Data exchange. All Parquet files (zstd) and `SHA256SUMS` are attached to the GitHub release `data-v1`. No data in the git history; only `data/manifest.csv` and `data/cohort.csv` are tracked.
+E13. Data exchange. All Parquet files (zstd) and `SHA256SUMS` are attached to a GitHub release (`data-v1`, since E16 `data-v2`). No data in the git history; only `data/manifest.csv` and `data/cohort.csv` are tracked.
 
 E14. Language. Code, documentation, commits and notebook in English.
 
-E15. Corrections after `data-v1`. An audit on 2026-11-15 found four problems in the pipeline. They are fixed in the code; the release files stay unchanged until the group agrees on a new version, so `data-v1` is rebuilt exactly only from the tag `data-v1`.
+E15. Corrections after `data-v1`. An audit on 2026-11-15 found these problems in the pipeline; they are fixed in the code. `data-v1` can be rebuilt exactly only from the tag `data-v1`.
 - Trips across the repeated fall-back hour (local end before local start) were dropped as `end_before_start`: 1,123 trips, 0.0009 % of all trips. The pipeline now moves the end to the second occurrence and keeps them.
 - The second occurrence of 01:00 on fall-back nights is a structural zero. It now gets `status = dst_repeat`; `load_station_hours` applies the same label to `data-v1`.
 - Inactive runs could cross the split date, so one development station-day depended on holdout data. Runs now end at the split date.
 - An interrupted grid build was taken as finished on the next run. The grid now writes a completion marker last and is rebuilt when it is missing. The loader's clipping kept turning missing weather into zeros; it now keeps missing values missing.
-- No `data-v2` for now. The corrections change less than 0.02 % of the rows, the loader already labels the repeated hour, and the modelling code downloads `data-v1` directly. A new release would force every user to switch versions for an effect below the noise of the models. `data-v1` stays the reference; a later build from the current code is only published if the group decides so.
+E16. Release `data-v2`. The group switches to a release built from the corrected code. Compared with `data-v1` it keeps the 1,123 trips across the repeated hour (+1,070 pickups and +1,099 dropoffs at cohort stations), labels 5,871 rows `dst_repeat`, turns 72 station-hours from `inactive` to `observed` at the split date and clips 19 forecast values. Row counts, cohort, calendar, observed weather and the laptop file are identical. `data-v1` stays published for reproducing earlier results.

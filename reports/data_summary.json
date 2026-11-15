@@ -1,55 +1,55 @@
 {
-  "data_version": "data-v1",
+  "data_version": "data-v2",
   "trips": {
     "months": 39,
     "by_year": {
       "2023": {
         "raw_rows": 35106986,
-        "kept_rows": 35088190,
+        "kept_rows": 35088513,
         "duplicate_ride_id": 0,
         "missing_start_station": 18198,
         "unparsable_time": 0,
         "time_out_of_range": 0,
-        "end_before_start": 323,
+        "end_before_start": 0,
         "start_outside_study_period": 275,
         "kept_missing_end_station": 86845,
         "kept_duration_under_1min": 1,
         "kept_duration_over_24h": 26641,
-        "kept_start_ambiguous_hour": 2587,
+        "kept_start_ambiguous_hour": 2910,
         "kept_start_nonexistent_hour": 0,
-        "kept_station_id_normalised": 1246290
+        "kept_station_id_normalised": 1246293
       },
       "2024": {
         "raw_rows": 44303209,
-        "kept_rows": 44273056,
+        "kept_rows": 44273374,
         "duplicate_ride_id": 0,
         "missing_start_station": 29835,
         "unparsable_time": 0,
         "time_out_of_range": 0,
-        "end_before_start": 318,
+        "end_before_start": 0,
         "start_outside_study_period": 0,
-        "kept_missing_end_station": 107794,
+        "kept_missing_end_station": 107795,
         "kept_duration_under_1min": 0,
         "kept_duration_over_24h": 10966,
-        "kept_start_ambiguous_hour": 3213,
+        "kept_start_ambiguous_hour": 3531,
         "kept_start_nonexistent_hour": 0,
-        "kept_station_id_normalised": 944767
+        "kept_station_id_normalised": 944777
       },
       "2025": {
         "raw_rows": 45771102,
-        "kept_rows": 45750349,
+        "kept_rows": 45750831,
         "duplicate_ride_id": 0,
         "missing_start_station": 20271,
         "unparsable_time": 0,
         "time_out_of_range": 0,
-        "end_before_start": 482,
+        "end_before_start": 0,
         "start_outside_study_period": 0,
         "kept_missing_end_station": 127077,
         "kept_duration_under_1min": 1,
         "kept_duration_over_24h": 9093,
-        "kept_start_ambiguous_hour": 3641,
+        "kept_start_ambiguous_hour": 4123,
         "kept_start_nonexistent_hour": 0,
-        "kept_station_id_normalised": 803856
+        "kept_station_id_normalised": 803861
       },
       "2026": {
         "raw_rows": 5981588,
@@ -70,19 +70,19 @@
     },
     "total": {
       "raw_rows": 131162885,
-      "kept_rows": 131089090,
+      "kept_rows": 131090213,
       "duplicate_ride_id": 0,
       "missing_start_station": 72397,
       "unparsable_time": 0,
       "time_out_of_range": 0,
-      "end_before_start": 1123,
+      "end_before_start": 0,
       "start_outside_study_period": 275,
-      "kept_missing_end_station": 347032,
+      "kept_missing_end_station": 347033,
       "kept_duration_under_1min": 5,
       "kept_duration_over_24h": 48656,
-      "kept_start_ambiguous_hour": 9441,
+      "kept_start_ambiguous_hour": 10564,
       "kept_start_nonexistent_hour": 0,
-      "kept_station_id_normalised": 3077947
+      "kept_station_id_normalised": 3077965
     },
     "duration_sensitivity": {
       "outside_1min_24h": 48661,
@@ -214,9 +214,9 @@
       "first_hour_utc": "2023-01-01 05:00:00",
       "last_hour_utc": "2025-10-01 03:00:00",
       "inactive_share": 0.01363,
-      "zero_share_observed": 0.4815,
-      "pickups": 109762226,
-      "dropoffs": 109461817,
+      "zero_share_observed": 0.4814,
+      "pickups": 109762835,
+      "dropoffs": 109462446,
       "pickups_median_observed": 1.0,
       "pickups_p99_observed": 22.0,
       "pickups_max": 216,
@@ -228,9 +228,9 @@
       "first_hour_utc": "2025-10-01 04:00:00",
       "last_hour_utc": "2026-04-01 03:00:00",
       "inactive_share": 0.04472,
-      "zero_share_observed": 0.5574,
-      "pickups": 15240981,
-      "dropoffs": 15189389,
+      "zero_share_observed": 0.5573,
+      "pickups": 15241442,
+      "dropoffs": 15189859,
       "pickups_median_observed": 0.0,
       "pickups_p99_observed": 19.0,
       "pickups_max": 175,
@@ -243,7 +243,7 @@
     },
     "inactive_runs": {
       "stations_with_inactive_days": 1063,
-      "inactive_station_days": 43623
+      "inactive_station_days": 43620
     }
   },
   "weather": {
