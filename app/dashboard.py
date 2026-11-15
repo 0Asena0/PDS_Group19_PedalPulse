@@ -1,5 +1,6 @@
 from pathlib import Path
 from urllib.request import urlretrieve
+import altair as alt
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
@@ -62,7 +63,6 @@ def _ensure_branch_file(local_path: Path, repo_rel_path: str) -> Path:
 def _find_and_download_stations_file(manifest_path: Path) -> Path | None:
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. Prüfen, ob schon eine Stationsdatei lokal liegt
     local_candidates = [
         Path("data/stations.parquet"),
         Path("data/stations.csv"),
@@ -73,7 +73,6 @@ def _find_and_download_stations_file(manifest_path: Path) -> Path | None:
         if p.exists():
             return p
 
-    # 2. Aus manifest.csv den Dateinamen / Link im Release data-v1 ermitteln
     candidate_urls: list[tuple[str, str]] = []
     if manifest_path.exists():
         manifest = pd.read_csv(manifest_path)
@@ -87,7 +86,6 @@ def _find_and_download_stations_file(manifest_path: Path) -> Path | None:
                     url = val_clean if val_clean.startswith("http") else f"{RELEASE_BASE_URL}/{filename}"
                     candidate_urls.append((filename, url))
 
-    # Standard-Dateinamen als Fallback ergänzen
     for fallback_name in ["stations.parquet", "stations.csv"]:
         candidate_urls.append((fallback_name, f"{RELEASE_BASE_URL}/{fallback_name}"))
 
@@ -201,6 +199,147 @@ def assign_color(pred: float) -> list[int]:
     return [215, 48, 39, 240]
 
 
+def render_station_detail(
+    stations: pd.DataFrame,
+    day_df: pd.DataFrame,
+    selected_date: object,
+) -> None:
+    st.divider()
+    st.subheader(f"Stationsdetail: Tagesverlauf & Fehleranalyse ({selected_date})")
+
+    # Stationen nach Tagesprognose sortieren, damit stark frequentierte Stationen oben stehen
+    day_totals = (
+        day_df.groupby("station_id", as_index=False)["prediction"]
+        .sum()
+        .rename(columns={"prediction": "day_pred_sum"})
+    )
+    station_choices = stations.merge(day_totals, on="station_id", how="left").sort_values(
+        by=["day_pred_sum", "station_name"], ascending=[False, True]
+    )
+
+    station_choices["label"] = station_choices.apply(
+        lambda r: f"{r['station_name']} (ID: {r['station_id']} · {r['borough']})",
+        axis=1,
+    )
+    label_to_id = dict(zip(station_choices["label"], station_choices["station_id"]))
+
+    selected_label = st.selectbox(
+        "Station auswählen (oder Namen eintippen zum Suchen)",
+        options=station_choices["label"].tolist(),
+        index=0,
+    )
+    selected_sid = label_to_id[selected_label]
+    station_meta = station_choices[station_choices["station_id"] == selected_sid].iloc[0]
+
+    st_day = day_df[day_df["station_id"] == selected_sid].sort_values("local_hour").copy()
+    if st_day.empty:
+        st.info("Für diese Station liegen am gewählten Tag keine Prognosedaten vor.")
+        return
+
+    st_day["Stunde"] = st_day["local_hour"].apply(lambda h: f"{h:02d}:00")
+    st_day["error"] = st_day["prediction"] - st_day["pickups"]
+    st_day["abs_error"] = st_day["error"].abs()
+
+    observed_df = st_day[st_day["pickups"].notna()]
+    missing_hours = int((st_day["status"] == "missing").sum())
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Tagesprognose (Ausleihen)", f"{st_day['prediction'].sum():.1f}")
+    if not observed_df.empty:
+        c2.metric("Tages-Istwert (beobachtet)", f"{int(observed_df['pickups'].sum())}")
+        c3.metric("MAE (Ø absoluter Fehler/h)", f"{observed_df['abs_error'].mean():.2f}")
+        c4.metric("Bias (Ø Prognose − Ist)", f"{observed_df['error'].mean():+.2f}")
+    else:
+        c2.metric("Tages-Istwert", "noch offen")
+        c3.metric("MAE", "–")
+        c4.metric("Bias", "–")
+
+    if observed_df.empty:
+        st.info(
+            "Für diesen Zieltag liegen noch keine Ist-Werte vor (Zukunftsprognose). "
+            "Wähle links einen früheren Tag (z. B. `2025-07-14` oder `2025-07-15`), um den Ist-Vergleich und die Fehlerkurve zu prüfen."
+        )
+    elif missing_hours > 0:
+        st.caption(
+            f"Hinweis: Für diese Station sind am gewählten Tag {missing_hours} Stunde(n) als Datenlücke (`missing`) markiert und werden in der Fehlerberechnung ausgelassen."
+        )
+
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.markdown("**Stündlicher Verlauf: Prognose vs. Ist-Wert (Ausleihen / Stunde)**")
+        plot_long = st_day[["local_hour", "Stunde", "prediction", "pickups"]].melt(
+            id_vars=["local_hour", "Stunde"],
+            value_vars=["prediction", "pickups"],
+            var_name="Reihe",
+            value_name="Ausleihen",
+        )
+        plot_long["Reihe"] = plot_long["Reihe"].map(
+            {"prediction": "Prognose", "pickups": "Ist-Wert"}
+        )
+
+        line_chart = (
+            alt.Chart(plot_long)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("local_hour:O", title="Stunde (Ortszeit NYC)"),
+                y=alt.Y("Ausleihen:Q", title="Ausleihen / Stunde"),
+                color=alt.Color(
+                    "Reihe:N",
+                    scale=alt.Scale(
+                        domain=["Prognose", "Ist-Wert"],
+                        range=["#2563eb", "#16a34a"],
+                    ),
+                ),
+                tooltip=["Stunde", "Reihe", alt.Tooltip("Ausleihen:Q", format=".1f")],
+            )
+            .properties(height=300)
+        )
+        st.altair_chart(line_chart, use_container_width=True)
+
+    with col_right:
+        st.markdown("**Stündliche Abweichung (Prognose − Ist-Wert)**")
+        if observed_df.empty:
+            st.caption("Keine Fehlerbalken verfügbar, da noch keine Ist-Werte vorliegen.")
+        else:
+            err_chart = (
+                alt.Chart(st_day)
+                .mark_bar()
+                .encode(
+                    x=alt.X("local_hour:O", title="Stunde (Ortszeit NYC)"),
+                    y=alt.Y("error:Q", title="Abweichung (Ausleihen / h)"),
+                    color=alt.condition(
+                        alt.datum.error >= 0,
+                        alt.value("#f97316"),
+                        alt.value("#0ea5e9"),
+                    ),
+                    tooltip=[
+                        "Stunde",
+                        alt.Tooltip("prediction:Q", title="Prognose", format=".1f"),
+                        alt.Tooltip("pickups:Q", title="Ist-Wert", format=".0f"),
+                        alt.Tooltip("error:Q", title="Fehler", format="+.1f"),
+                        "status",
+                    ],
+                )
+                .properties(height=300)
+            )
+            st.altair_chart(err_chart, use_container_width=True)
+
+    with st.expander("Stundenwerte als Tabelle anzeigen"):
+        table_df = st_day[["Stunde", "prediction", "pickups", "error", "status"]].rename(
+            columns={
+                "prediction": "Prognose",
+                "pickups": "Ist-Wert",
+                "error": "Abweichung (Prognose - Ist)",
+                "status": "Status",
+            }
+        )
+        st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+    if pd.isna(station_meta["lat"]) or pd.isna(station_meta["lon"]):
+        st.caption("Hinweis: Diese Station gehört zu den Stationen ohne GPS-Koordinaten auf der Karte.")
+
+
 def main() -> None:
     st.title("PedalPulse – Stündliche Ausleihprognose (NYC Citi Bike)")
 
@@ -307,6 +446,8 @@ def main() -> None:
         "**Legende (Einheit: geschätzte Ausleihen / Stunde, feste Skala):** "
         "`< 2` (hellblau) · `2–5.9` (blau) · `6–11.9` (orange) · `12–19.9` (rot-orange) · `≥ 20` (dunkelrot) · `fehlend` (grau)"
     )
+
+    render_station_detail(stations=stations, day_df=day_df, selected_date=selected_date)
 
 
 if __name__ == "__main__":
