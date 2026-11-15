@@ -133,7 +133,12 @@ def classify_sql(files_sql: str) -> str:
     mapped AS (
         SELECT t.*,
             t.started_local + (ms.utc_hour - ms.local_hour) AS started_utc,
-            t.ended_local + (me.utc_hour - me.local_hour) AS ended_utc,
+            -- Fall back: a trip that starts in the first and ends in the second 01:00-01:59 has a local end
+            -- before its local start. Only the second occurrence (one hour later in UTC) makes it consistent.
+            t.ended_local + (me.utc_hour - me.local_hour)
+                + CASE WHEN me.kind = 'ambiguous' AND t.ended_local < t.started_local
+                            AND date_trunc('hour', t.ended_local) = date_trunc('hour', t.started_local)
+                       THEN INTERVAL 1 HOUR ELSE INTERVAL 0 HOUR END AS ended_utc,
             ms.kind AS start_kind,
             row_number() OVER (
                 PARTITION BY t.ride_id

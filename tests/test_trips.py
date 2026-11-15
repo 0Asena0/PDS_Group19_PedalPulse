@@ -20,6 +20,8 @@ ROWS = [
     ("d", "classic_bike", "not a time", "2024-11-03 02:20:00", "S1", "6140.05", "S2", "6140.10", 40.7, -73.9, 40.7, -73.9, "member"),
     ("e", "classic_bike", "2024-11-03 03:00:00", "2024-11-03 02:00:00", "S1", "6140.05", "S2", "6140.10", 40.7, -73.9, 40.7, -73.9, "member"),
     ("f", "classic_bike", "2024-11-03 05:00:00", "2024-11-03 05:00:30", "S1", "6140.05", "", "", 40.7, -73.9, None, None, "member"),
+    # starts in the first 01:00 hour of the fall-back night, ends 6 minutes later in the repeated 01:00 hour
+    ("h", "classic_bike", "2024-11-03 01:56:00", "2024-11-03 01:02:00", "S1", "6140.05", "S2", "6140.10", 40.7, -73.9, 40.7, -73.9, "member"),
     ("g", "classic_bike", "2024-11-30 23:50:00", "2024-12-01 00:10:00", "S2", "6140.10_", "S1", "6140.05", 40.7, -73.9, 40.7, -73.9, "member"),
 ]
 
@@ -48,7 +50,7 @@ def sandbox(tmp_path, monkeypatch):
 def test_filter_log_counts_every_rule(sandbox):
     load_month("2024-11")
     log = json.loads(filter_log_path("2024-11").read_text())
-    assert log["raw_rows"] == 8
+    assert log["raw_rows"] == 9
     assert log["dropped"] == {
         "duplicate_ride_id": 1,
         "missing_start_station": 1,
@@ -57,8 +59,8 @@ def test_filter_log_counts_every_rule(sandbox):
         "end_before_start": 1,
         "start_outside_study_period": 0,
     }
-    assert log["kept_rows"] == 4
-    assert log["kept_start_ambiguous_hour"] == 1
+    assert log["kept_rows"] == 5
+    assert log["kept_start_ambiguous_hour"] == 2
     assert log["kept_missing_end_station"] == 1
     assert log["kept_duration_under_1min"] == 1
     assert log["csv_parts"] == ["202411-citibike-tripdata_1.csv", "202411-citibike-tripdata_2.csv"]
@@ -73,13 +75,21 @@ def test_station_ids_are_normalised_and_times_converted(sandbox):
     assert str(trips.loc["a", "started_utc"]) == "2024-11-03 04:30:00"
 
 
+def test_trip_across_the_repeated_hour_is_kept(sandbox):
+    load_month("2024-11")
+    trips = pd.read_parquet(trips_path("2024-11")).set_index("ride_id")
+    assert str(trips.loc["h", "started_utc"]) == "2024-11-03 05:56:00"
+    assert str(trips.loc["h", "ended_utc"]) == "2024-11-03 06:02:00"
+    assert trips.loc["h", "duration_s"] == 360
+
+
 def test_aggregation_preserves_trip_counts(sandbox):
     load_month("2024-11")
     aggregate_month("2024-11")
     pickups = pd.read_parquet(output_path("pickups", "2024-11"))
     dropoffs = pd.read_parquet(output_path("dropoffs", "2024-11"))
-    assert pickups["pickups"].sum() == 4
-    assert dropoffs["dropoffs"].sum() == 3  # one trip has no end station
+    assert pickups["pickups"].sum() == 5
+    assert dropoffs["dropoffs"].sum() == 4  # one trip has no end station
     assert not pickups.duplicated(["station_id", "hour_utc"]).any()
     ended_next_month = dropoffs[dropoffs["hour_utc"] == pd.Timestamp("2024-12-01 05:00")]
     assert ended_next_month["dropoffs"].sum() == 1

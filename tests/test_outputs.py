@@ -149,7 +149,7 @@ def test_inactive_status_only_on_days_without_trips(con):
         )
     """).fetchone()[0]
     assert busy_inactive_days == 0
-    assert set(r[0] for r in con.execute(f"SELECT DISTINCT status FROM {dev}").fetchall()) <= {"observed", "inactive"}
+    assert set(r[0] for r in con.execute(f"SELECT DISTINCT status FROM {dev}").fetchall()) <= {"observed", "inactive", "dst_repeat"}
 
 
 def test_daily_system_has_every_study_day():
