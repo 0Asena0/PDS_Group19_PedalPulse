@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from urllib.request import urlretrieve
 import altair as alt
@@ -33,6 +34,7 @@ ACTUALS_PATH = (
     else PROCESSED_DIR / "dummy_actuals.parquet"
 )
 LOCAL_TZ = "America/New_York"
+WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
 
 
 def _normalize_station_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -67,6 +69,20 @@ def _ensure_branch_file(local_path: Path, repo_rel_path: str) -> Path:
     url = f"{RAW_BASE_URL}/{repo_rel_path}"
     urlretrieve(url, local_path)
     return local_path
+
+
+def _ensure_release_asset(filename: str) -> Path | None:
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    target = PROCESSED_DIR / filename
+    if target.exists() and target.stat().st_size > 0:
+        return target
+    try:
+        urlretrieve(f"{RELEASE_BASE_URL}/{filename}", target)
+        if target.exists() and target.stat().st_size > 0:
+            return target
+    except Exception:
+        target.unlink(missing_ok=True)
+    return None
 
 
 def _find_and_download_stations_file(manifest_path: Path) -> Path | None:
@@ -160,6 +176,27 @@ def load_stations() -> pd.DataFrame:
 
 
 @st.cache_data
+def load_context_hourly() -> pd.DataFrame:
+    cal_path = _ensure_release_asset("calendar.parquet")
+    weather_path = _ensure_release_asset("weather_forecast.parquet")
+    if cal_path is None:
+        return pd.DataFrame()
+
+    cal = pd.read_parquet(cal_path)[["hour_utc", "weekday", "is_holiday", "holiday_name"]].copy()
+    cal["hour_utc"] = pd.to_datetime(cal["hour_utc"], utc=True)
+
+    if weather_path is not None:
+        w = pd.read_parquet(weather_path)[
+            ["hour_utc", "temperature_2m", "precipitation", "wind_speed_10m"]
+        ].copy()
+        w["hour_utc"] = pd.to_datetime(w["hour_utc"], utc=True)
+        w["precipitation"] = w["precipitation"].clip(lower=0.0)
+        cal = cal.merge(w, on="hour_utc", how="left")
+
+    return cal
+
+
+@st.cache_data
 def load_forecasts(preds_path: Path, actuals_path: Path) -> pd.DataFrame:
     preds = pd.read_parquet(preds_path)
     preds["station_id"] = preds["station_id"].astype(str)
@@ -201,7 +238,18 @@ def assign_color(pred: float) -> list[int]:
     return [215, 48, 39, 245]
 
 
-def render_legend() -> None:
+def render_legend(map_style: str) -> None:
+    if map_style == "Fließende Heatmap-Welle":
+        st.markdown(
+            '<div style="margin-top:6px;margin-bottom:4px;font-size:13px;">'
+            '<strong>Nachfragedichte:</strong> '
+            '<span style="background:linear-gradient(90deg,#1e3a8a,#06b6d4,#facc15,#f97316,#dc2626);'
+            'display:inline-block;width:160px;height:11px;border-radius:4px;vertical-align:middle;margin:0 8px;"></span>'
+            'niedrig → Hotspot-Welle</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
     items = [
         ("#41b6c4", "< 2"),
         ("#2c7fb8", "2 – 5,9"),
@@ -421,6 +469,7 @@ def main() -> None:
 
     stations = load_stations()
     forecasts = load_forecasts(PREDS_PATH, ACTUALS_PATH)
+    context_hourly = load_context_hourly()
 
     data_mode = str(forecasts["data_mode"].iloc[0])
     model_version = str(forecasts["model_version"].iloc[0])
@@ -431,11 +480,25 @@ def main() -> None:
 
     day_df_all = forecasts[forecasts["local_date"] == selected_date]
     available_hours = sorted(day_df_all["local_hour"].unique())
+
+    if "selected_hour" not in st.session_state:
+        st.session_state["selected_hour"] = available_hours[min(8, len(available_hours) - 1)]
+    if st.session_state["selected_hour"] not in available_hours:
+        st.session_state["selected_hour"] = available_hours[0]
+
     selected_hour = st.sidebar.select_slider(
         "Zielstunde (Beginn)",
         options=available_hours,
-        value=available_hours[min(8, len(available_hours) - 1)],
+        key="selected_hour",
         format_func=lambda h: f"{h:02d}:00 Uhr",
+    )
+
+    play_wave = st.sidebar.toggle("▶ Tagesverlauf als Welle abspielen", value=False)
+
+    map_style = st.sidebar.radio(
+        "Karten-Darstellung",
+        options=["Fließende Heatmap-Welle", "Heatmap + Stationen", "Stationspunkte"],
+        index=0,
     )
 
     borough_options = ["Alle Stadtteile"] + sorted(
@@ -459,9 +522,24 @@ def main() -> None:
     day_df = day_df_all[day_df_all["station_id"].isin(filtered_ids)]
     hour_df = day_df[day_df["local_hour"] == selected_hour].copy()
 
+    target_utc = hour_df["target_start_utc"].iloc[0]
     origin_utc = hour_df["origin_utc"].iloc[0]
     origin_local = origin_utc.tz_convert(LOCAL_TZ)
-    target_local = hour_df["target_start_utc"].iloc[0].tz_convert(LOCAL_TZ)
+    target_local = target_utc.tz_convert(LOCAL_TZ)
+
+    # Wetter- und Kalender-Kontext für die gewählte Stunde anreichern
+    context_str = f"Wochentag: {WEEKDAYS_DE[target_local.weekday()]}"
+    if not context_hourly.empty:
+        ctx_match = context_hourly[context_hourly["hour_utc"] == target_utc]
+        if not ctx_match.empty:
+            row_ctx = ctx_match.iloc[0]
+            if bool(row_ctx.get("is_holiday", False)) and pd.notna(row_ctx.get("holiday_name")):
+                context_str += f" ({row_ctx['holiday_name']})"
+            if pd.notna(row_ctx.get("temperature_2m")):
+                temp_c = float(row_ctx["temperature_2m"])
+                rain_mm = float(row_ctx.get("precipitation", 0.0) or 0.0)
+                wind_kmh = float(row_ctx.get("wind_speed_10m", 0.0) or 0.0)
+                context_str += f" · Wettervorhersage: {temp_c:.1f} °C, {rain_mm:.1f} mm Regen, {wind_kmh:.0f} km/h Wind"
 
     if "dummy" in data_mode.lower():
         st.warning(
@@ -470,10 +548,8 @@ def main() -> None:
         )
     else:
         st.caption(
-            f"**Datenbasis:** Citi Bike System Data (`data-v1`) · "
-            f"**Prognoseursprung:** {origin_local.strftime('%Y-%m-%d %H:%M %Z')} ({origin_utc.strftime('%H:%M UTC')}) · "
-            f"**Zielstunde:** {target_local.strftime('%Y-%m-%d %H:%M %Z')} · "
-            f"**Gebiet:** {selected_borough}"
+            f"**Zielstunde:** {target_local.strftime('%Y-%m-%d %H:%M %Z')} · {context_str} · "
+            f"**Prognoseursprung:** {origin_local.strftime('%Y-%m-%d %H:%M %Z')}"
         )
 
     map_df = filtered_stations.merge(hour_df, on="station_id", how="left")
@@ -481,6 +557,7 @@ def main() -> None:
     valid_map_df = map_df.dropna(subset=["lat", "lon"]).copy()
 
     valid_map_df["color"] = valid_map_df["prediction"].apply(assign_color)
+    valid_map_df["pred_weight"] = valid_map_df["prediction"].fillna(0.0).astype(float)
     valid_map_df["pred_label"] = valid_map_df["prediction"].apply(
         lambda x: f"{x:.1f}" if pd.notna(x) else "fehlend"
     )
@@ -529,16 +606,34 @@ def main() -> None:
         center_lon = float(valid_map_df["lon"].mean()) if not valid_map_df.empty else -73.98
         zoom_level = 11.0 if selected_borough == "Alle Stadtteile" else 12.2
 
-        layer = pdk.Layer(
-            "ScatterplotLayer",
-            data=valid_map_df,
-            get_position="[lon, lat]",
-            get_fill_color="color",
-            get_radius=55,
-            radius_min_pixels=3,
-            radius_max_pixels=12,
-            pickable=True,
-        )
+        layers = []
+        if map_style in ["Fließende Heatmap-Welle", "Heatmap + Stationen"]:
+            layers.append(
+                pdk.Layer(
+                    "HeatmapLayer",
+                    data=valid_map_df,
+                    get_position="[lon, lat]",
+                    get_weight="pred_weight",
+                    radiusPixels=48,
+                    intensity=1.35,
+                    threshold=0.04,
+                    opacity=0.82,
+                )
+            )
+
+        if map_style in ["Stationspunkte", "Heatmap + Stationen"]:
+            layers.append(
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=valid_map_df,
+                    get_position="[lon, lat]",
+                    get_fill_color="color",
+                    get_radius=45 if map_style == "Heatmap + Stationen" else 55,
+                    radius_min_pixels=2 if map_style == "Heatmap + Stationen" else 3,
+                    radius_max_pixels=10 if map_style == "Heatmap + Stationen" else 12,
+                    pickable=True,
+                )
+            )
 
         view_state = pdk.ViewState(
             latitude=center_lat,
@@ -547,18 +642,22 @@ def main() -> None:
             pitch=0,
         )
 
-        tooltip = {
-            "html": (
-                "<b>{station_name}</b><br/>"
-                "<span style='color:#cbd5e1;'>{borough} · ID: {station_id}</span><br/>"
-                "Prognose: <b>{pred_label}</b> / h<br/>"
-                "Ist-Wert: <b>{actual_label}</b> (Abw.: {diff_label})"
-            ),
-            "style": {"backgroundColor": "#1e293b", "color": "white", "fontSize": "12px"},
-        }
+        tooltip = (
+            {
+                "html": (
+                    "<b>{station_name}</b><br/>"
+                    "<span style='color:#cbd5e1;'>{borough} · ID: {station_id}</span><br/>"
+                    "Prognose: <b>{pred_label}</b> / h<br/>"
+                    "Ist-Wert: <b>{actual_label}</b> (Abw.: {diff_label})"
+                ),
+                "style": {"backgroundColor": "#1e293b", "color": "white", "fontSize": "12px"},
+            }
+            if map_style != "Fließende Heatmap-Welle"
+            else None
+        )
 
-        st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip))
-        render_legend()
+        st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=view_state, tooltip=tooltip))
+        render_legend(map_style)
 
     with top_col:
         st.subheader(f"Top 10 ({selected_hour:02d}:00 Uhr)")
@@ -594,6 +693,13 @@ def main() -> None:
         selected_date=selected_date,
         selected_borough=selected_borough,
     )
+
+    if play_wave:
+        curr_idx = available_hours.index(selected_hour)
+        next_idx = (curr_idx + 1) % len(available_hours)
+        st.session_state["selected_hour"] = available_hours[next_idx]
+        time.sleep(0.65)
+        st.rerun()
 
 
 if __name__ == "__main__":
