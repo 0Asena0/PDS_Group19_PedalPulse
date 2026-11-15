@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.request import urlretrieve
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
@@ -8,9 +9,19 @@ st.set_page_config(
     layout="wide",
 )
 
+REPO_OWNER = "0Asena0"
+REPO_NAME = "PDS_Group19_PedalPulse"
+SOURCE_BRANCH = "branch_benjamin"
+RELEASE_TAG = "data-v1"
+
+RAW_BASE_URL = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{SOURCE_BRANCH}"
+RELEASE_BASE_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{RELEASE_TAG}"
+
 COHORT_PATH = Path("data/cohort.csv")
-PREDS_PATH = Path("data/processed/dummy_predictions.parquet")
-ACTUALS_PATH = Path("data/processed/dummy_actuals.parquet")
+MANIFEST_PATH = Path("data/manifest.csv")
+PROCESSED_DIR = Path("data/processed")
+PREDS_PATH = PROCESSED_DIR / "dummy_predictions.parquet"
+ACTUALS_PATH = PROCESSED_DIR / "dummy_actuals.parquet"
 LOCAL_TZ = "America/New_York"
 
 
@@ -39,36 +50,102 @@ def _normalize_station_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=rename_map)
 
 
+def _ensure_branch_file(local_path: Path, repo_rel_path: str) -> Path:
+    if local_path.exists():
+        return local_path
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    url = f"{RAW_BASE_URL}/{repo_rel_path}"
+    urlretrieve(url, local_path)
+    return local_path
+
+
+def _find_and_download_stations_file(manifest_path: Path) -> Path | None:
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 1. Prüfen, ob schon eine Stationsdatei lokal liegt
+    local_candidates = [
+        Path("data/stations.parquet"),
+        Path("data/stations.csv"),
+        PROCESSED_DIR / "stations.parquet",
+        PROCESSED_DIR / "stations.csv",
+    ]
+    for p in local_candidates:
+        if p.exists():
+            return p
+
+    # 2. Aus manifest.csv den Dateinamen / Link im Release data-v1 ermitteln
+    candidate_urls: list[tuple[str, str]] = []
+    if manifest_path.exists():
+        manifest = pd.read_csv(manifest_path)
+        for col in manifest.columns:
+            for val in manifest[col].dropna().astype(str):
+                val_clean = val.strip()
+                if "station" in val_clean.lower() and (
+                    val_clean.endswith(".parquet") or val_clean.endswith(".csv")
+                ):
+                    filename = Path(val_clean).name
+                    url = val_clean if val_clean.startswith("http") else f"{RELEASE_BASE_URL}/{filename}"
+                    candidate_urls.append((filename, url))
+
+    # Standard-Dateinamen als Fallback ergänzen
+    for fallback_name in ["stations.parquet", "stations.csv"]:
+        candidate_urls.append((fallback_name, f"{RELEASE_BASE_URL}/{fallback_name}"))
+
+    seen = set()
+    for filename, url in candidate_urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        target_path = PROCESSED_DIR / filename
+        try:
+            urlretrieve(url, target_path)
+            if target_path.exists() and target_path.stat().st_size > 0:
+                return target_path
+        except Exception:
+            if target_path.exists():
+                target_path.unlink(missing_ok=True)
+
+    return None
+
+
 @st.cache_data
-def load_stations(path: Path) -> pd.DataFrame:
-    df = _normalize_station_columns(pd.read_csv(path))
+def load_stations() -> pd.DataFrame:
+    cohort_file = _ensure_branch_file(COHORT_PATH, "data/cohort.csv")
+    manifest_file = _ensure_branch_file(MANIFEST_PATH, "data/manifest.csv")
 
-    if "station_id" not in df.columns:
-        st.error(f"Spalte `station_id` fehlt in `{path}`. Gefundene Spalten: {list(df.columns)}")
-        st.stop()
-
+    df = _normalize_station_columns(pd.read_csv(cohort_file))
     df["station_id"] = df["station_id"].astype(str)
 
-    # Falls Koordinaten nicht in cohort.csv stehen, in typischen Stationsdateien suchen
     if "lat" not in df.columns or "lon" not in df.columns:
-        for alt_path in [Path("data/stations.csv"), Path("data/processed/stations.parquet")]:
-            if alt_path.exists():
-                alt_df = pd.read_parquet(alt_path) if alt_path.suffix == ".parquet" else pd.read_csv(alt_path)
-                alt_df = _normalize_station_columns(alt_df)
-                if {"station_id", "lat", "lon"}.issubset(alt_df.columns):
-                    alt_df["station_id"] = alt_df["station_id"].astype(str)
-                    df = df.drop(columns=[c for c in ["lat", "lon"] if c in df.columns]).merge(
-                        alt_df[["station_id", "lat", "lon"]].drop_duplicates("station_id"),
-                        on="station_id",
-                        how="left",
-                    )
-                    break
+        stations_file = _find_and_download_stations_file(manifest_file)
+        if stations_file is not None:
+            st_df = (
+                pd.read_parquet(stations_file)
+                if stations_file.suffix == ".parquet"
+                else pd.read_csv(stations_file)
+            )
+            st_df = _normalize_station_columns(st_df)
+            if {"station_id", "lat", "lon"}.issubset(st_df.columns):
+                st_df["station_id"] = st_df["station_id"].astype(str)
+                extra_cols = [
+                    c for c in ["lat", "lon", "station_name", "borough"]
+                    if c in st_df.columns and c not in df.columns
+                ]
+                df = df.merge(
+                    st_df[["station_id"] + extra_cols].drop_duplicates("station_id"),
+                    on="station_id",
+                    how="left",
+                )
 
     if "lat" not in df.columns or "lon" not in df.columns:
+        manifest_preview = (
+            pd.read_csv(manifest_file).to_dict(orient="records")
+            if manifest_file.exists()
+            else "manifest.csv nicht gefunden"
+        )
         st.error(
-            f"Keine Koordinaten (`lat`/`lon`) in `{path}` gefunden. "
-            f"Vorhandene Spalten sind: `{list(df.columns)}`. "
-            "Bitte kopiere diese Spaltenliste kurz in den Chat!"
+            "Koordinaten (`lat`/`lon`) konnten noch nicht geladen werden. "
+            f"Inhalt von `data/manifest.csv`: `{manifest_preview}`"
         )
         st.stop()
 
@@ -127,13 +204,13 @@ def assign_color(pred: float) -> list[int]:
 def main() -> None:
     st.title("PedalPulse – Stündliche Ausleihprognose (NYC Citi Bike)")
 
-    if not COHORT_PATH.exists() or not PREDS_PATH.exists():
+    if not PREDS_PATH.exists():
         st.error(
-            "Eingabedateien fehlen. Bitte zuerst `python src/pedalpulse/dummy_forecast.py` ausführen."
+            "Prognosedatei fehlt. Bitte zuerst `python src/pedalpulse/dummy_forecast.py` ausführen."
         )
         st.stop()
 
-    stations = load_stations(COHORT_PATH)
+    stations = load_stations()
     forecasts = load_forecasts(PREDS_PATH, ACTUALS_PATH)
 
     data_mode = str(forecasts["data_mode"].iloc[0])
