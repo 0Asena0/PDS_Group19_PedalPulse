@@ -1,4 +1,3 @@
-cat << 'EOF' > app/dashboard.py
 from pathlib import Path
 from urllib.request import urlretrieve
 import altair as alt
@@ -426,7 +425,6 @@ def main() -> None:
     data_mode = str(forecasts["data_mode"].iloc[0])
     model_version = str(forecasts["model_version"].iloc[0])
 
-    # Sidebar: Zeit- und Gebietsauswahl
     st.sidebar.header("Filter & Zeitauswahl")
     available_dates = sorted(forecasts["local_date"].unique())
     selected_date = st.sidebar.selectbox("Zieltag (Ortszeit NYC)", available_dates, index=0)
@@ -600,5 +598,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-EOF
-python -m streamlit run app/dashboard.py
