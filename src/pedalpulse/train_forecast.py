@@ -1,12 +1,12 @@
 import argparse
 import gc
 import json
-from datetime import date
 from pathlib import Path
 from urllib.request import urlretrieve
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, root_mean_squared_error
 
@@ -17,7 +17,11 @@ RELEASE_BASE_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/downlo
 
 PROCESSED_DIR = Path("data/processed")
 REPORTS_DIR = Path("reports")
+
 EPOCH_DATE = pd.Timestamp("2023-01-01")
+EPOCH_UTC = pd.Timestamp("2023-01-01 00:00:00", tz="UTC")
+N_DAYS = 1210
+N_HOURS_GRID = 29000
 
 FEATURE_COLS = [
     "hour_local",
@@ -53,7 +57,7 @@ def ensure_release_file(filename: str) -> Path:
     return target
 
 
-def load_supporting_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, int], list[str]]:
+def load_lookup_arrays() -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], dict[str, int], list[str]]:
     cal_path = ensure_release_file("calendar.parquet")
     weather_path = ensure_release_file("weather_forecast.parquet")
     stations_path = ensure_release_file("stations.parquet")
@@ -63,10 +67,7 @@ def load_supporting_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
     ].copy()
     cal["hour_utc"] = pd.to_datetime(cal["hour_utc"], utc=True)
     cal["origin_utc"] = pd.to_datetime(cal["origin_utc"], utc=True)
-    cal["weekday"] = cal["weekday"].astype("int8")
-    cal["month"] = cal["month"].astype("int8")
-    cal["is_weekend"] = cal["is_weekend"].astype("int8")
-    cal["is_holiday"] = cal["is_holiday"].astype("int8")
+    cal["hour_idx"] = ((cal["hour_utc"] - EPOCH_UTC).dt.total_seconds() // 3600).astype(np.int32)
 
     weather = pd.read_parquet(weather_path)[
         [
@@ -80,11 +81,30 @@ def load_supporting_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
     ].copy()
     weather["hour_utc"] = pd.to_datetime(weather["hour_utc"], utc=True)
     weather["available_at_utc"] = pd.to_datetime(weather["available_at_utc"], utc=True)
-    # Laut data_contract.md Rundungsartefakte begrenzen und kompakt speichern
-    weather["cloud_cover"] = weather["cloud_cover"].clip(lower=0.0, upper=100.0).astype("float32")
-    weather["precipitation"] = weather["precipitation"].clip(lower=0.0).astype("float32")
-    weather["temperature_2m"] = weather["temperature_2m"].astype("float32")
-    weather["wind_speed_10m"] = weather["wind_speed_10m"].astype("float32")
+    weather["cloud_cover"] = weather["cloud_cover"].clip(lower=0.0, upper=100.0)
+    weather["precipitation"] = weather["precipitation"].clip(lower=0.0)
+
+    cw = cal.merge(weather, on="hour_utc", how="left")
+    leak_mask = cw["available_at_utc"] > cw["origin_utc"]
+    if leak_mask.any():
+        cw.loc[leak_mask, ["temperature_2m", "precipitation", "wind_speed_10m", "cloud_cover"]] = np.nan
+
+    hour_lookup = {
+        "weekday": np.zeros(N_HOURS_GRID, dtype=np.float32),
+        "month": np.zeros(N_HOURS_GRID, dtype=np.float32),
+        "is_weekend": np.zeros(N_HOURS_GRID, dtype=np.float32),
+        "is_holiday": np.zeros(N_HOURS_GRID, dtype=np.float32),
+        "temperature_2m": np.full(N_HOURS_GRID, np.nan, dtype=np.float32),
+        "precipitation": np.full(N_HOURS_GRID, np.nan, dtype=np.float32),
+        "wind_speed_10m": np.full(N_HOURS_GRID, np.nan, dtype=np.float32),
+        "cloud_cover": np.full(N_HOURS_GRID, np.nan, dtype=np.float32),
+        "origin_ns": np.zeros(N_HOURS_GRID, dtype=np.int64),
+    }
+
+    h_idx = cw["hour_idx"].to_numpy()
+    for col in ["weekday", "month", "is_weekend", "is_holiday", "temperature_2m", "precipitation", "wind_speed_10m", "cloud_cover"]:
+        hour_lookup[col][h_idx] = cw[col].to_numpy(dtype=np.float32)
+    hour_lookup["origin_ns"][h_idx] = cw["origin_utc"].astype("int64").to_numpy()
 
     stations = pd.read_parquet(stations_path)[
         ["station_id", "lat", "lng", "borough", "first_seen_hour_utc"]
@@ -94,141 +114,130 @@ def load_supporting_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
 
     idx_to_station = stations["station_id"].tolist()
     station_to_idx = {sid: idx for idx, sid in enumerate(idx_to_station)}
-    stations["station_idx"] = np.arange(len(stations), dtype="int16")
-    stations["lat"] = stations["lat"].astype("float32")
-    stations["lng"] = stations["lng"].astype("float32")
-    stations["first_seen_hour_utc"] = pd.to_datetime(stations["first_seen_hour_utc"], utc=True)
-    stations["borough_code"] = (
-        stations["borough"].fillna("Unknown").astype("category").cat.codes.astype("int16")
-    )
+    first_seen_utc = pd.to_datetime(stations["first_seen_hour_utc"], utc=True)
 
-    return cal, weather, stations, station_to_idx, idx_to_station
+    station_lookup = {
+        "n_stations": len(idx_to_station),
+        "lat": stations["lat"].to_numpy(dtype=np.float32),
+        "lng": stations["lng"].to_numpy(dtype=np.float32),
+        "borough_code": stations["borough"].fillna("Unknown").astype("category").cat.codes.to_numpy(dtype=np.float32),
+        "first_seen_hour_idx": ((first_seen_utc - EPOCH_UTC).dt.total_seconds() // 3600).to_numpy(dtype=np.float32),
+    }
+
+    return hour_lookup, station_lookup, station_to_idx, idx_to_station
 
 
-def load_station_hours(
+def stream_parquet_into_grids(
     filename: str,
     station_to_idx: dict[str, int],
-    min_date: date | None = None,
-) -> pd.DataFrame:
+    pickups_grid: np.ndarray,
+    dropoffs_grid: np.ndarray,
+    min_day_idx: int,
+    keep_rows: bool,
+    only_observed: bool = False,
+) -> dict[str, np.ndarray] | None:
     path = ensure_release_file(filename)
+    pf = pq.ParquetFile(path)
     cols = ["station_id", "hour_utc", "date_local", "hour_local", "pickups", "dropoffs", "status"]
-    if min_date is not None:
-        try:
-            df = pd.read_parquet(path, columns=cols, filters=[("date_local", ">=", min_date)])
-        except Exception:
-            df = pd.read_parquet(path, columns=cols)
-            df = df[pd.to_datetime(df["date_local"]).dt.date >= min_date]
-    else:
-        df = pd.read_parquet(path, columns=cols)
 
-    mapped_idx = df["station_id"].astype(str).map(station_to_idx)
-    valid_mask = mapped_idx.notna()
-    if not valid_mask.all():
-        df = df[valid_mask].copy()
-        mapped_idx = mapped_idx[valid_mask]
-
-    out = pd.DataFrame(
-        {
-            "station_idx": mapped_idx.astype("int16").to_numpy(),
-            "hour_utc": pd.to_datetime(df["hour_utc"], utc=True).to_numpy(),
-            "day_idx": (pd.to_datetime(df["date_local"]) - EPOCH_DATE).dt.days.astype("int16").to_numpy(),
-            "hour_local": df["hour_local"].astype("int8").to_numpy(),
-            "pickups": df["pickups"].astype("float32").to_numpy(),
-            "dropoffs": df["dropoffs"].astype("float32").to_numpy(),
-            "is_observed": (df["status"] == "observed").to_numpy(),
-        }
-    )
-    del df, mapped_idx
-    gc.collect()
-    return out
-
-
-def add_features(
-    target_df: pd.DataFrame,
-    history_df: pd.DataFrame,
-    cal: pd.DataFrame,
-    weather: pd.DataFrame,
-    stations: pd.DataFrame,
-    filter_for_training: bool = False,
-) -> pd.DataFrame:
-    df = target_df.copy()
-
-    # Kompakte Lookup-Tabelle auf kleinen Integer-Schlüsseln (verhindert DST-Probleme & spart RAM)
-    hourly_hist = history_df[["station_idx", "day_idx", "hour_local", "pickups", "dropoffs"]].drop_duplicates(
-        subset=["station_idx", "day_idx", "hour_local"]
-    )
-
-    for lag_days in [1, 2, 7, 14]:
-        shifted = hourly_hist[["station_idx", "day_idx", "hour_local", "pickups"]].copy()
-        shifted["day_idx"] = (shifted["day_idx"] + lag_days).astype("int16")
-        shifted = shifted.rename(columns={"pickups": f"lag_{lag_days}d_pickups"})
-        df = df.merge(shifted, on=["station_idx", "day_idx", "hour_local"], how="left")
-        del shifted
-        gc.collect()
-
-    shifted_drop = hourly_hist[["station_idx", "day_idx", "hour_local", "dropoffs"]].copy()
-    shifted_drop["day_idx"] = (shifted_drop["day_idx"] + 1).astype("int16")
-    shifted_drop = shifted_drop.rename(columns={"dropoffs": "lag_1d_dropoffs"})
-    df = df.merge(shifted_drop, on=["station_idx", "day_idx", "hour_local"], how="left")
-    del shifted_drop, hourly_hist
-    gc.collect()
-
-    # Beim Training nicht beobachtete / Warmup-Zeilen sofort entfernen, bevor weitere Joins folgen
-    if filter_for_training:
-        df = df[df["is_observed"] & df["lag_7d_pickups"].notna()].copy()
-        gc.collect()
-
-    # Vortages-Gesamtausleihen der Station (bis Ende D-1 bekannt)
-    daily_hist = (
-        history_df.groupby(["station_idx", "day_idx"], as_index=False)["pickups"]
-        .sum()
-        .rename(columns={"pickups": "prev_day_station_pickups"})
-    )
-    daily_hist["day_idx"] = (daily_hist["day_idx"] + 1).astype("int16")
-    daily_hist["prev_day_station_pickups"] = daily_hist["prev_day_station_pickups"].astype("float32")
-    df = df.merge(daily_hist, on=["station_idx", "day_idx"], how="left")
-    del daily_hist
-    gc.collect()
-
-    # Kalender-, Wetter- und statische Stationsmerkmale anspielen
-    df = df.merge(cal, on="hour_utc", how="left")
-    df = df.merge(weather, on="hour_utc", how="left")
-    df = df.merge(
-        stations[["station_idx", "lat", "lng", "borough_code", "first_seen_hour_utc"]],
-        on="station_idx",
-        how="left",
-    )
-
-    # Strikte Prüfung der E1-Informationsgrenze für Wettervorhersagen
-    leak_mask = df["available_at_utc"] > df["origin_utc"]
-    if leak_mask.any():
-        df.loc[leak_mask, ["temperature_2m", "precipitation", "wind_speed_10m", "cloud_cover"]] = np.nan
-
-    df["station_age_days"] = (
-        ((df["hour_utc"] - df["first_seen_hour_utc"]).dt.total_seconds() / 86400.0)
-        .clip(lower=0.0)
-        .astype("float32")
-    )
-    df.drop(columns=["available_at_utc", "first_seen_hour_utc"], inplace=True)
-
-    # Saisonale Wochen-Baseline (gleiche Stunde vor 7 Tagen, Fallback auf Vortag)
-    df["baseline_prediction"] = (
-        df["lag_7d_pickups"].fillna(df["lag_1d_pickups"]).fillna(0.0).clip(lower=0.0).astype("float32")
-    )
-    gc.collect()
-    return df
-
-
-def evaluate_predictions(df: pd.DataFrame, pred_col: str) -> dict[str, float]:
-    obs = df[df["is_observed"]]
-    y_true = obs["pickups"].to_numpy(dtype=np.float64)
-    y_pred = obs[pred_col].to_numpy(dtype=np.float64)
-    return {
-        "rows_observed": int(len(obs)),
-        "mae": float(mean_absolute_error(y_true, y_pred)),
-        "rmse": float(root_mean_squared_error(y_true, y_pred)),
-        "bias": float(np.mean(y_pred - y_true)),
+    chunks: dict[str, list[np.ndarray]] = {
+        "station_idx": [],
+        "hour_idx": [],
+        "day_idx": [],
+        "hour_local": [],
+        "pickups": [],
+        "is_observed": [],
     }
+
+    for batch in pf.iter_batches(batch_size=500_000, columns=cols):
+        df = batch.to_pandas()
+        d_idx = (pd.to_datetime(df["date_local"]) - EPOCH_DATE).dt.days.to_numpy(dtype=np.int16)
+
+        # Nur Zeilen ab dem relevanten Zeitraum verarbeiten
+        date_mask = d_idx >= min_day_idx
+        if not date_mask.any():
+            continue
+
+        df = df[date_mask]
+        d_idx = d_idx[date_mask]
+
+        s_idx = df["station_id"].astype(str).map(station_to_idx)
+        valid_mask = s_idx.notna().to_numpy()
+        if not valid_mask.any():
+            continue
+
+        df = df[valid_mask]
+        d_idx = d_idx[valid_mask]
+        s_arr = s_idx[valid_mask].to_numpy(dtype=np.int16)
+        h_loc = df["hour_local"].to_numpy(dtype=np.int8)
+        p_arr = df["pickups"].to_numpy(dtype=np.float32)
+        drop_arr = df["dropoffs"].to_numpy(dtype=np.float32)
+
+        pickups_grid[s_arr, d_idx, h_loc] = p_arr
+        dropoffs_grid[s_arr, d_idx, h_loc] = drop_arr
+
+        if keep_rows:
+            obs_arr = (df["status"] == "observed").to_numpy()
+            if only_observed:
+                keep_mask = obs_arr
+            else:
+                keep_mask = np.ones(len(df), dtype=bool)
+
+            if keep_mask.any():
+                h_utc = pd.to_datetime(df["hour_utc"], utc=True)
+                h_idx = ((h_utc - EPOCH_UTC).dt.total_seconds() // 3600).to_numpy(dtype=np.int32)
+                chunks["station_idx"].append(s_arr[keep_mask])
+                chunks["hour_idx"].append(h_idx[keep_mask])
+                chunks["day_idx"].append(d_idx[keep_mask])
+                chunks["hour_local"].append(h_loc[keep_mask])
+                chunks["pickups"].append(p_arr[keep_mask])
+                chunks["is_observed"].append(obs_arr[keep_mask])
+
+    gc.collect()
+    if not keep_rows:
+        return None
+    return {k: np.concatenate(v) for k, v in chunks.items()}
+
+
+def build_feature_matrix(
+    rows: dict[str, np.ndarray],
+    pickups_grid: np.ndarray,
+    dropoffs_grid: np.ndarray,
+    daily_pickups: np.ndarray,
+    hour_lookup: dict[str, np.ndarray],
+    station_lookup: dict[str, np.ndarray],
+) -> np.ndarray:
+    n = len(rows["station_idx"])
+    X = np.empty((n, len(FEATURE_COLS)), dtype=np.float32)
+
+    s = rows["station_idx"]
+    h_idx = rows["hour_idx"]
+    d = rows["day_idx"]
+    hl = rows["hour_local"]
+
+    X[:, 0] = hl.astype(np.float32)
+    X[:, 1] = hour_lookup["weekday"][h_idx]
+    X[:, 2] = hour_lookup["month"][h_idx]
+    X[:, 3] = hour_lookup["is_weekend"][h_idx]
+    X[:, 4] = hour_lookup["is_holiday"][h_idx]
+    X[:, 5] = station_lookup["lat"][s]
+    X[:, 6] = station_lookup["lng"][s]
+    X[:, 7] = station_lookup["borough_code"][s]
+    X[:, 8] = np.maximum(0.0, (h_idx.astype(np.float32) - station_lookup["first_seen_hour_idx"][s]) / 24.0)
+
+    # Lags über (station_idx, day_idx - k, hour_local) -> 100 % DST-konform zu data_contract.md
+    X[:, 9] = pickups_grid[s, np.maximum(0, d - 1), hl]
+    X[:, 10] = pickups_grid[s, np.maximum(0, d - 2), hl]
+    X[:, 11] = pickups_grid[s, np.maximum(0, d - 7), hl]
+    X[:, 12] = pickups_grid[s, np.maximum(0, d - 14), hl]
+    X[:, 13] = dropoffs_grid[s, np.maximum(0, d - 1), hl]
+    X[:, 14] = daily_pickups[s, np.maximum(0, d - 1)]
+
+    X[:, 15] = hour_lookup["temperature_2m"][h_idx]
+    X[:, 16] = hour_lookup["precipitation"][h_idx]
+    X[:, 17] = hour_lookup["wind_speed_10m"][h_idx]
+    X[:, 18] = hour_lookup["cloud_cover"][h_idx]
+    return X
 
 
 def main() -> None:
@@ -246,37 +255,67 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    cal, weather, stations, station_to_idx, idx_to_station = load_supporting_tables()
+    hour_lookup, station_lookup, station_to_idx, idx_to_station = load_lookup_arrays()
+    n_stations = station_lookup["n_stations"]
+
+    pickups_grid = np.full((n_stations, N_DAYS, 24), np.nan, dtype=np.float32)
+    dropoffs_grid = np.full((n_stations, N_DAYS, 24), np.nan, dtype=np.float32)
 
     if args.quick:
         print("Starte Schnelllauf (--quick) auf dev_sample_manhattan_2024_summer.parquet...")
-        dev_raw = load_station_hours("dev_sample_manhattan_2024_summer.parquet", station_to_idx)
+        dev_rows = stream_parquet_into_grids(
+            "dev_sample_manhattan_2024_summer.parquet",
+            station_to_idx,
+            pickups_grid,
+            dropoffs_grid,
+            min_day_idx=0,
+            keep_rows=True,
+            only_observed=True,
+        )
         data_mode = "holdout_from_quick_dev"
         model_version = "hist_gbdt_quick_v1"
     else:
-        print("Lade dev-Trainingsdaten (ab 2024-09-15 für 12 Monate Saisonzyklus + Lags)...")
-        dev_raw = load_station_hours(
-            "station_hours_dev.parquet", station_to_idx, min_date=date(2024, 9, 15)
+        # Ab 2024-09-15 einlesen (12 Monate Saisonzyklus + 14 Tage Lag-Vorlauf)
+        min_dev_day = int((pd.Timestamp("2024-09-15") - EPOCH_DATE).days)
+        print("Lade dev-Trainingsdaten (ab 2024-09-15) speichersparend in Batches...")
+        dev_rows = stream_parquet_into_grids(
+            "station_hours_dev.parquet",
+            station_to_idx,
+            pickups_grid,
+            dropoffs_grid,
+            min_day_idx=min_dev_day,
+            keep_rows=True,
+            only_observed=True,
         )
         data_mode = "holdout_backtest"
         model_version = "hist_gbdt_v1"
 
-    print("Erzeuge Trainings-Features (speichersparend, strikt bis D-1 23:59 Ortszeit)...")
-    train_df = add_features(
-        dev_raw, dev_raw, cal, weather, stations, filter_for_training=True
+    assert dev_rows is not None
+    daily_pickups = np.nansum(pickups_grid, axis=2).astype(np.float32)
+
+    # Nur Zeilen behalten, die mindestens 14 Tage Historie für die Lags haben
+    min_train_day = int(dev_rows["day_idx"].min()) + 14
+    valid_train = dev_rows["day_idx"] >= min_train_day
+    for k in dev_rows:
+        dev_rows[k] = dev_rows[k][valid_train]
+
+    # Falls > 5 Mio. Trainingszeilen, gleichmäßig auf 5 Mio. begrenzen (schont RAM, gleiche Güte)
+    max_train_rows = 5_000_000
+    if len(dev_rows["station_idx"]) > max_train_rows:
+        rng = np.random.default_rng(42)
+        sub_idx = np.sort(rng.choice(len(dev_rows["station_idx"]), size=max_train_rows, replace=False))
+        for k in dev_rows:
+            dev_rows[k] = dev_rows[k][sub_idx]
+
+    print(f"Erzeuge Trainingsmatrix für {len(dev_rows['station_idx']):,} beobachtete Stunden...")
+    X_train = build_feature_matrix(
+        dev_rows, pickups_grid, dropoffs_grid, daily_pickups, hour_lookup, station_lookup
     )
-
-    # Nur die letzten 15 Tage von dev für den Lag-Übergang in den Oktober behalten
-    dev_tail = dev_raw[dev_raw["day_idx"] >= int((pd.Timestamp("2025-09-15") - EPOCH_DATE).days)].copy()
-    del dev_raw
+    y_train = np.clip(dev_rows["pickups"], 0.0, None)
+    del dev_rows
     gc.collect()
 
-    print(f"Trainiere HistGradientBoostingRegressor auf {len(train_df):,} beobachteten Stunden...")
-    X_train = train_df[FEATURE_COLS].to_numpy(dtype=np.float32)
-    y_train = np.clip(train_df["pickups"].to_numpy(dtype=np.float32), 0.0, None)
-    del train_df
-    gc.collect()
-
+    print("Trainiere HistGradientBoostingRegressor (Poisson-Loss)...")
     model = HistGradientBoostingRegressor(
         loss="poisson",
         max_iter=150,
@@ -290,25 +329,56 @@ def main() -> None:
     gc.collect()
 
     print("Lade Holdout-Testzeitraum (2025-10-01 bis 2026-03-31)...")
-    holdout_raw = load_station_hours("station_hours_holdout.parquet", station_to_idx)
-    combined_hist = pd.concat([dev_tail, holdout_raw], ignore_index=True)
-    del dev_tail
-    gc.collect()
-
-    print("Berechne Holdout-Features und Prognosen...")
-    holdout_feat = add_features(
-        holdout_raw, combined_hist, cal, weather, stations, filter_for_training=False
+    holdout_rows = stream_parquet_into_grids(
+        "station_hours_holdout.parquet",
+        station_to_idx,
+        pickups_grid,
+        dropoffs_grid,
+        min_day_idx=0,
+        keep_rows=True,
+        only_observed=False,
     )
-    del holdout_raw, combined_hist
+    assert holdout_rows is not None
+    daily_pickups = np.nansum(pickups_grid, axis=2).astype(np.float32)
+
+    n_holdout = len(holdout_rows["station_idx"])
+    preds = np.empty(n_holdout, dtype=np.float32)
+    baseline = np.empty(n_holdout, dtype=np.float32)
+
+    # Vorhersagen in 1-Mio.-Blöcken berechnen, damit RAM niedrig bleibt
+    chunk_size = 1_000_000
+    for start in range(0, n_holdout, chunk_size):
+        end = min(start + chunk_size, n_holdout)
+        sub_rows = {k: v[start:end] for k, v in holdout_rows.items()}
+        X_chunk = build_feature_matrix(
+            sub_rows, pickups_grid, dropoffs_grid, daily_pickups, hour_lookup, station_lookup
+        )
+        preds[start:end] = np.clip(model.predict(X_chunk), 0.0, None)
+        # Baseline: lag_7d_pickups (Spalte 11), Fallback lag_1d_pickups (Spalte 9), sonst 0
+        b_chunk = np.where(np.isnan(X_chunk[:, 11]), X_chunk[:, 9], X_chunk[:, 11])
+        baseline[start:end] = np.clip(np.nan_to_num(b_chunk, nan=0.0), 0.0, None)
+        del X_chunk
+
+    del pickups_grid, dropoffs_grid, daily_pickups
     gc.collect()
 
-    X_holdout = holdout_feat[FEATURE_COLS].to_numpy(dtype=np.float32)
-    holdout_feat["prediction"] = np.clip(model.predict(X_holdout), 0.0, None).astype("float32")
-    del X_holdout
-    gc.collect()
+    obs_mask = holdout_rows["is_observed"]
+    y_true_obs = holdout_rows["pickups"][obs_mask].astype(np.float64)
+    y_pred_obs = preds[obs_mask].astype(np.float64)
+    y_base_obs = baseline[obs_mask].astype(np.float64)
 
-    baseline_metrics = evaluate_predictions(holdout_feat, "baseline_prediction")
-    model_metrics = evaluate_predictions(holdout_feat, "prediction")
+    baseline_metrics = {
+        "rows_observed": int(obs_mask.sum()),
+        "mae": float(mean_absolute_error(y_true_obs, y_base_obs)),
+        "rmse": float(root_mean_squared_error(y_true_obs, y_base_obs)),
+        "bias": float(np.mean(y_base_obs - y_true_obs)),
+    }
+    model_metrics = {
+        "rows_observed": int(obs_mask.sum()),
+        "mae": float(mean_absolute_error(y_true_obs, y_pred_obs)),
+        "rmse": float(root_mean_squared_error(y_true_obs, y_pred_obs)),
+        "bias": float(np.mean(y_pred_obs - y_true_obs)),
+    }
 
     print("\n=== Holdout-Auswertung (2025-10-01 bis 2026-03-31, status == observed) ===")
     print(
@@ -331,52 +401,34 @@ def main() -> None:
     (REPORTS_DIR / "holdout_metrics.json").write_text(json.dumps(metrics_payload, indent=2))
 
     # Letzte N Tage des Holdouts für das Dashboard kompakt exportieren
-    max_day = int(holdout_feat["day_idx"].max())
+    max_day = int(holdout_rows["day_idx"].max())
     export_start_day = max_day - (args.export_days - 1)
-    export_df = holdout_feat[holdout_feat["day_idx"] >= export_start_day].copy()
-    del holdout_feat
-    gc.collect()
+    exp_mask = holdout_rows["day_idx"] >= export_start_day
 
     station_arr = np.array(idx_to_station, dtype=object)
-    station_ids = station_arr[export_df["station_idx"].to_numpy()]
+    exp_station_ids = station_arr[holdout_rows["station_idx"][exp_mask]]
+    exp_h_idx = holdout_rows["hour_idx"][exp_mask]
+
+    target_utc = EPOCH_UTC + pd.to_timedelta(exp_h_idx, unit="h")
+    origin_utc = pd.to_datetime(hour_lookup["origin_ns"][exp_h_idx], utc=True)
 
     preds_out = pd.DataFrame(
         {
-            "station_id": station_ids,
-            "origin_utc": export_df["origin_utc"],
-            "target_start_utc": export_df["hour_utc"],
-            "prediction": export_df["prediction"],
-            "baseline_prediction": export_df["baseline_prediction"],
+            "station_id": exp_station_ids,
+            "origin_utc": origin_utc,
+            "target_start_utc": target_utc,
+            "prediction": preds[exp_mask],
+            "baseline_prediction": baseline[exp_mask],
             "model_version": model_version,
             "data_mode": data_mode,
         }
     )
 
-    actuals_pickups = export_df["pickups"].to_numpy(dtype=np.float32)
-    actuals_pickups[~export_df["is_observed"].to_numpy()] = np.nan
-    actuals_status = np.where(export_df["is_observed"].to_numpy(), "observed", "missing")
+    exp_pickups = holdout_rows["pickups"][exp_mask].copy()
+    exp_obs = holdout_rows["is_observed"][exp_mask]
+    exp_pickups[~exp_obs] = np.nan
+    exp_status = np.where(exp_obs, "observed", "missing")
 
     actuals_out = pd.DataFrame(
         {
-            "station_id": station_ids,
-            "target_start_utc": export_df["hour_utc"],
-            "pickups": actuals_pickups,
-            "status": actuals_status,
-        }
-    )
-
-    preds_path = PROCESSED_DIR / "predictions.parquet"
-    actuals_path = PROCESSED_DIR / "actuals.parquet"
-    preds_out.to_parquet(preds_path, index=False)
-    actuals_out.to_parquet(actuals_path, index=False)
-
-    start_date_str = (EPOCH_DATE + pd.Timedelta(days=export_start_day)).date()
-    end_date_str = (EPOCH_DATE + pd.Timedelta(days=max_day)).date()
-    print(
-        f"\nGespeichert ({start_date_str} bis {end_date_str}): "
-        f"{len(preds_out):,} Prognosezeilen -> {preds_path}"
-    )
-
-
-if __name__ == "__main__":
-    main()
+            "station_id": exp_station_ids,
