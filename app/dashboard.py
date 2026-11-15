@@ -1,4 +1,3 @@
-import time
 from pathlib import Path
 from urllib.request import urlretrieve
 import altair as alt
@@ -7,7 +6,7 @@ import pydeck as pdk
 import streamlit as st
 
 st.set_page_config(
-    page_title="PedalPulse – NYC Citi Bike Prognose",
+    page_title="PedalPulse – NYC Citi Bike Demand Forecast",
     page_icon="🚲",
     layout="wide",
 )
@@ -34,7 +33,7 @@ ACTUALS_PATH = (
     else PROCESSED_DIR / "dummy_actuals.parquet"
 )
 LOCAL_TZ = "America/New_York"
-WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+WEEKDAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
 def _normalize_station_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -161,14 +160,14 @@ def load_stations() -> pd.DataFrame:
                 )
 
     if "lat" not in df.columns or "lon" not in df.columns:
-        st.error("Koordinaten (`lat`/`lon`) konnten nicht geladen werden.")
+        st.error("Station coordinates (`lat`/`lon`) could not be loaded.")
         st.stop()
 
     if "station_name" not in df.columns:
         df["station_name"] = df["station_id"]
     if "borough" not in df.columns:
         df["borough"] = "NYC"
-    df["borough"] = df["borough"].fillna("Unbekannt")
+    df["borough"] = df["borough"].fillna("Unknown")
 
     return df[["station_id", "station_name", "lat", "lon", "borough"]].drop_duplicates(
         subset=["station_id"]
@@ -239,24 +238,24 @@ def assign_color(pred: float) -> list[int]:
 
 
 def render_legend(map_style: str) -> None:
-    if map_style == "Fließende Heatmap-Welle":
+    if map_style == "Smooth Heatmap Wave":
         st.markdown(
             '<div style="margin-top:6px;margin-bottom:4px;font-size:13px;">'
-            '<strong>Nachfragedichte:</strong> '
+            '<strong>Demand Density:</strong> '
             '<span style="background:linear-gradient(90deg,#1e3a8a,#06b6d4,#facc15,#f97316,#dc2626);'
             'display:inline-block;width:160px;height:11px;border-radius:4px;vertical-align:middle;margin:0 8px;"></span>'
-            'niedrig → Hotspot-Welle</div>',
+            'low → hotspot wave</div>',
             unsafe_allow_html=True,
         )
         return
 
     items = [
         ("#41b6c4", "< 2"),
-        ("#2c7fb8", "2 – 5,9"),
-        ("#fdae61", "6 – 11,9"),
-        ("#f46d43", "12 – 19,9"),
+        ("#2c7fb8", "2 – 5.9"),
+        ("#fdae61", "6 – 11.9"),
+        ("#f46d43", "12 – 19.9"),
         ("#d73027", "≥ 20"),
-        ("#969696", "fehlend"),
+        ("#969696", "missing"),
     ]
     badges = "".join(
         f'<span style="display:inline-flex;align-items:center;margin-right:14px;font-size:13px;">'
@@ -266,7 +265,7 @@ def render_legend(map_style: str) -> None:
     )
     st.markdown(
         f'<div style="margin-top:6px;margin-bottom:4px;">'
-        f'<strong style="font-size:13px;margin-right:10px;">Ausleihen / Stunde:</strong>{badges}</div>',
+        f'<strong style="font-size:13px;margin-right:10px;">Trips / Hour:</strong>{badges}</div>',
         unsafe_allow_html=True,
     )
 
@@ -278,7 +277,7 @@ def render_station_detail(
     selected_borough: str,
 ) -> None:
     st.divider()
-    st.subheader(f"Stationsdetail & Fehleranalyse ({selected_date})")
+    st.subheader(f"Station Detail & Error Analysis ({selected_date})")
 
     day_totals = (
         day_df.groupby("station_id", as_index=False)["prediction"]
@@ -298,7 +297,7 @@ def render_station_detail(
     ctrl_col1, ctrl_col2 = st.columns([3, 1.2])
     with ctrl_col1:
         selected_label = st.selectbox(
-            f"Station auswählen ({len(station_choices)} Stationen in Auswahl: {selected_borough})",
+            f"Select Station ({len(station_choices)} stations in selection: {selected_borough})",
             options=station_choices["label"].tolist(),
             index=0,
         )
@@ -307,7 +306,7 @@ def render_station_detail(
         st.write("")
         st.write("")
         show_baseline = st.checkbox(
-            "7-Tage-Baseline einblenden",
+            "Show 7-day baseline",
             value=True,
             disabled=not has_baseline,
         )
@@ -317,10 +316,10 @@ def render_station_detail(
 
     st_day = day_df[day_df["station_id"] == selected_sid].sort_values("local_hour").copy()
     if st_day.empty:
-        st.info("Für diese Station liegen am gewählten Tag keine Prognosedaten vor.")
+        st.info("No forecast data available for this station on the selected date.")
         return
 
-    st_day["Stunde"] = st_day["local_hour"].apply(lambda h: f"{h:02d}:00")
+    st_day["Hour"] = st_day["local_hour"].apply(lambda h: f"{h:02d}:00")
     st_day["error"] = st_day["prediction"] - st_day["pickups"]
     st_day["abs_error"] = st_day["error"].abs()
 
@@ -329,102 +328,102 @@ def render_station_detail(
 
     c1, c2, c3, c4 = st.columns(4)
     with c1.container(border=True):
-        st.metric("Tagesprognose", f"{st_day['prediction'].sum():.1f} Fahrten")
+        st.metric("Daily Forecast", f"{st_day['prediction'].sum():.1f} trips")
     with c2.container(border=True):
         if not observed_df.empty:
-            st.metric("Tages-Istwert", f"{int(observed_df['pickups'].sum())} Fahrten")
+            st.metric("Daily Actual", f"{int(observed_df['pickups'].sum())} trips")
         else:
-            st.metric("Tages-Istwert", "noch offen")
+            st.metric("Daily Actual", "pending")
     with c3.container(border=True):
         st.metric(
-            "MAE (Ø Fehler/h)",
+            "MAE (Avg Error/h)",
             f"{observed_df['abs_error'].mean():.2f}" if not observed_df.empty else "–",
         )
     with c4.container(border=True):
         st.metric(
-            "Bias (Prognose − Ist)",
+            "Bias (Forecast − Actual)",
             f"{observed_df['error'].mean():+.2f}" if not observed_df.empty else "–",
         )
 
     if observed_df.empty:
         st.info(
-            "Für diesen Zieltag liegen noch keine Ist-Werte vor. Wähle links einen früheren Tag für den Ist-Vergleich."
+            "Actual trip counts are not yet available for this target date. Select an earlier date on the left to compare against actuals."
         )
     elif missing_hours > 0:
         st.caption(
-            f"Hinweis: {missing_hours} Stunde(n) sind an diesem Tag als Datenlücke (`missing`) markiert."
+            f"Note: {missing_hours} hour(s) on this date are marked as missing data (`missing`)."
         )
 
-    tab_charts, tab_table = st.tabs(["Verlauf & Abweichung", "Stundentabelle & CSV-Export"])
+    tab_charts, tab_table = st.tabs(["Hourly Profile & Error", "Hourly Table & CSV Export"])
 
     with tab_charts:
         col_left, col_right = st.columns(2)
 
         with col_left:
-            st.markdown("**Stündlicher Verlauf: Prognose vs. Ist-Wert**")
+            st.markdown("**Hourly Profile: Forecast vs. Actual**")
             val_cols = ["prediction", "pickups"]
-            label_map = {"prediction": "ML-Prognose", "pickups": "Ist-Wert"}
-            domain = ["ML-Prognose", "Ist-Wert"]
+            label_map = {"prediction": "ML Forecast", "pickups": "Actual"}
+            domain = ["ML Forecast", "Actual"]
             colors = ["#2563eb", "#16a34a"]
 
             if show_baseline and has_baseline:
                 val_cols.append("baseline_prediction")
-                label_map["baseline_prediction"] = "7-Tage-Baseline"
-                domain.append("7-Tage-Baseline")
+                label_map["baseline_prediction"] = "7-Day Baseline"
+                domain.append("7-Day Baseline")
                 colors.append("#94a3b8")
 
-            plot_long = st_day[["local_hour", "Stunde"] + val_cols].melt(
-                id_vars=["local_hour", "Stunde"],
+            plot_long = st_day[["local_hour", "Hour"] + val_cols].melt(
+                id_vars=["local_hour", "Hour"],
                 value_vars=val_cols,
-                var_name="Reihe",
-                value_name="Ausleihen",
+                var_name="Series",
+                value_name="Trips",
             )
-            plot_long["Reihe"] = plot_long["Reihe"].map(label_map)
+            plot_long["Series"] = plot_long["Series"].map(label_map)
 
             line_chart = (
                 alt.Chart(plot_long)
                 .mark_line(point=True)
                 .encode(
-                    x=alt.X("local_hour:O", title="Stunde (Ortszeit NYC)"),
-                    y=alt.Y("Ausleihen:Q", title="Ausleihen / Stunde"),
+                    x=alt.X("local_hour:O", title="Hour (NYC Local Time)"),
+                    y=alt.Y("Trips:Q", title="Trips / Hour"),
                     color=alt.Color(
-                        "Reihe:N",
+                        "Series:N",
                         scale=alt.Scale(domain=domain, range=colors),
                         legend=alt.Legend(orient="top", title=None),
                     ),
                     strokeDash=alt.condition(
-                        alt.datum.Reihe == "7-Tage-Baseline",
+                        alt.datum.Series == "7-Day Baseline",
                         alt.value([5, 4]),
                         alt.value([0]),
                     ),
-                    tooltip=["Stunde", "Reihe", alt.Tooltip("Ausleihen:Q", format=".1f")],
+                    tooltip=["Hour", "Series", alt.Tooltip("Trips:Q", format=".1f")],
                 )
                 .properties(height=310)
             )
             st.altair_chart(line_chart, use_container_width=True)
 
         with col_right:
-            st.markdown("**Stündliche Abweichung (Prognose − Ist-Wert)**")
+            st.markdown("**Hourly Error (Forecast − Actual)**")
             if observed_df.empty:
-                st.caption("Keine Fehlerbalken verfügbar, da noch keine Ist-Werte vorliegen.")
+                st.caption("No error bars available because actual counts are not yet observed.")
             else:
                 bars = (
                     alt.Chart(st_day)
                     .mark_bar()
                     .encode(
-                        x=alt.X("local_hour:O", title="Stunde (Ortszeit NYC)"),
-                        y=alt.Y("error:Q", title="Abweichung (Ausleihen / h)"),
+                        x=alt.X("local_hour:O", title="Hour (NYC Local Time)"),
+                        y=alt.Y("error:Q", title="Error (trips / h)"),
                         color=alt.condition(
                             alt.datum.error >= 0,
                             alt.value("#f97316"),
                             alt.value("#0ea5e9"),
                         ),
                         tooltip=[
-                            "Stunde",
-                            alt.Tooltip("prediction:Q", title="Prognose", format=".1f"),
-                            alt.Tooltip("pickups:Q", title="Ist-Wert", format=".0f"),
-                            alt.Tooltip("error:Q", title="Fehler", format="+.1f"),
-                            "status",
+                            "Hour",
+                            alt.Tooltip("prediction:Q", title="Forecast", format=".1f"),
+                            alt.Tooltip("pickups:Q", title="Actual", format=".0f"),
+                            alt.Tooltip("error:Q", title="Error", format="+.1f"),
+                            alt.Tooltip("status:N", title="Status"),
                         ],
                     )
                 )
@@ -432,11 +431,11 @@ def render_station_detail(
                 st.altair_chart((bars + zero_rule).properties(height=310), use_container_width=True)
 
     with tab_table:
-        export_cols = ["Stunde", "prediction", "pickups", "error", "status"]
+        export_cols = ["Hour", "prediction", "pickups", "error", "status"]
         rename_cols = {
-            "prediction": "ML_Prognose",
-            "pickups": "Ist_Wert",
-            "error": "Abweichung",
+            "prediction": "ML_Forecast",
+            "pickups": "Actual",
+            "error": "Error",
             "status": "Status",
         }
         if has_baseline:
@@ -448,22 +447,22 @@ def render_station_detail(
 
         csv_bytes = table_df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="Tagesverlauf als CSV herunterladen",
+            label="Download daily profile as CSV",
             data=csv_bytes,
             file_name=f"pedalpulse_{selected_sid}_{selected_date}.csv",
             mime="text/csv",
         )
 
     if pd.isna(station_meta["lat"]) or pd.isna(station_meta["lon"]):
-        st.caption("Hinweis: Diese Station besitzt keine GPS-Koordinaten in den Metadaten.")
+        st.caption("Note: This station has no GPS coordinates in the metadata.")
 
 
 def main() -> None:
-    st.title("PedalPulse – Stündliche Ausleihprognose (NYC Citi Bike)")
+    st.title("PedalPulse – Hourly Demand Forecast (NYC Citi Bike)")
 
     if not PREDS_PATH.exists():
         st.error(
-            "Prognosedatei fehlt. Bitte zuerst `python src/pedalpulse/train_forecast.py` ausführen."
+            "Prediction file not found. Please run `python src/pedalpulse/train_forecast.py` first."
         )
         st.stop()
 
@@ -474,9 +473,9 @@ def main() -> None:
     data_mode = str(forecasts["data_mode"].iloc[0])
     model_version = str(forecasts["model_version"].iloc[0])
 
-    st.sidebar.header("Filter & Zeitauswahl")
+    st.sidebar.header("Filters & Time Selection")
     available_dates = sorted(forecasts["local_date"].unique())
-    selected_date = st.sidebar.selectbox("Zieltag (Ortszeit NYC)", available_dates, index=0)
+    selected_date = st.sidebar.selectbox("Target Date (NYC Local Time)", available_dates, index=0)
 
     day_df_all = forecasts[forecasts["local_date"] == selected_date]
     available_hours = sorted(day_df_all["local_hour"].unique())
@@ -487,33 +486,35 @@ def main() -> None:
         st.session_state["selected_hour"] = available_hours[0]
 
     selected_hour = st.sidebar.select_slider(
-        "Zielstunde (Beginn)",
+        "Target Hour (Start)",
         options=available_hours,
         key="selected_hour",
-        format_func=lambda h: f"{h:02d}:00 Uhr",
+        format_func=lambda h: f"{h:02d}:00",
     )
 
-    play_wave = st.sidebar.toggle("▶ Tagesverlauf als Welle abspielen", value=False)
+    play_wave = st.sidebar.toggle("▶ Play 24h Demand Wave", value=False)
+    if not play_wave:
+        st.session_state["wave_ready"] = False
 
     map_style = st.sidebar.radio(
-        "Karten-Darstellung",
-        options=["Fließende Heatmap-Welle", "Heatmap + Stationen", "Stationspunkte"],
+        "Map Display",
+        options=["Smooth Heatmap Wave", "Heatmap + Stations", "Station Points"],
         index=0,
     )
 
-    borough_options = ["Alle Stadtteile"] + sorted(
-        [b for b in stations["borough"].dropna().unique() if b != "Unbekannt"]
+    borough_options = ["All Boroughs"] + sorted(
+        [b for b in stations["borough"].dropna().unique() if b != "Unknown"]
     )
-    selected_borough = st.sidebar.selectbox("Stadtteil (Borough)", borough_options, index=0)
+    selected_borough = st.sidebar.selectbox("Borough", borough_options, index=0)
 
     st.sidebar.divider()
     st.sidebar.caption(
-        f"**Modell:** `{model_version}`\n\n"
-        f"**Modus:** `{data_mode}`\n\n"
-        f"**Kohorte:** {len(stations)} Stationen"
+        f"**Model:** `{model_version}`\n\n"
+        f"**Mode:** `{data_mode}`\n\n"
+        f"**Cohort:** {len(stations)} stations"
     )
 
-    if selected_borough == "Alle Stadtteile":
+    if selected_borough == "All Boroughs":
         filtered_stations = stations
     else:
         filtered_stations = stations[stations["borough"] == selected_borough]
@@ -527,8 +528,7 @@ def main() -> None:
     origin_local = origin_utc.tz_convert(LOCAL_TZ)
     target_local = target_utc.tz_convert(LOCAL_TZ)
 
-    # Wetter- und Kalender-Kontext für die gewählte Stunde anreichern
-    context_str = f"Wochentag: {WEEKDAYS_DE[target_local.weekday()]}"
+    context_str = f"Day: {WEEKDAYS_EN[target_local.weekday()]}"
     if not context_hourly.empty:
         ctx_match = context_hourly[context_hourly["hour_utc"] == target_utc]
         if not ctx_match.empty:
@@ -539,17 +539,17 @@ def main() -> None:
                 temp_c = float(row_ctx["temperature_2m"])
                 rain_mm = float(row_ctx.get("precipitation", 0.0) or 0.0)
                 wind_kmh = float(row_ctx.get("wind_speed_10m", 0.0) or 0.0)
-                context_str += f" · Wettervorhersage: {temp_c:.1f} °C, {rain_mm:.1f} mm Regen, {wind_kmh:.0f} km/h Wind"
+                context_str += f" · Weather Forecast: {temp_c:.1f} °C, {rain_mm:.1f} mm precip, {wind_kmh:.0f} km/h wind"
 
     if "dummy" in data_mode.lower():
         st.warning(
-            f"Testmodus: Synthetische Daten aktiv (`{model_version}`). "
-            f"Prognoseursprung: {origin_local.strftime('%Y-%m-%d %H:%M %Z')}"
+            f"Test mode: Synthetic data active (`{model_version}`). "
+            f"Forecast origin: {origin_local.strftime('%Y-%m-%d %H:%M %Z')}"
         )
     else:
         st.caption(
-            f"**Zielstunde:** {target_local.strftime('%Y-%m-%d %H:%M %Z')} · {context_str} · "
-            f"**Prognoseursprung:** {origin_local.strftime('%Y-%m-%d %H:%M %Z')}"
+            f"**Target Hour:** {target_local.strftime('%Y-%m-%d %H:%M %Z')} · {context_str} · "
+            f"**Forecast Origin:** {origin_local.strftime('%Y-%m-%d %H:%M %Z')}"
         )
 
     map_df = filtered_stations.merge(hour_df, on="station_id", how="left")
@@ -559,12 +559,12 @@ def main() -> None:
     valid_map_df["color"] = valid_map_df["prediction"].apply(assign_color)
     valid_map_df["pred_weight"] = valid_map_df["prediction"].fillna(0.0).astype(float)
     valid_map_df["pred_label"] = valid_map_df["prediction"].apply(
-        lambda x: f"{x:.1f}" if pd.notna(x) else "fehlend"
+        lambda x: f"{x:.1f}" if pd.notna(x) else "missing"
     )
     valid_map_df["actual_label"] = valid_map_df.apply(
         lambda r: f"{int(r['pickups'])}"
         if pd.notna(r.get("pickups"))
-        else ("Lücke (missing)" if r.get("status") == "missing" else "offen"),
+        else ("missing" if r.get("status") == "missing" else "pending"),
         axis=1,
     )
     valid_map_df["diff_label"] = valid_map_df.apply(
@@ -581,33 +581,33 @@ def main() -> None:
 
     col1, col2, col3, col4 = st.columns(4)
     with col1.container(border=True):
-        delta_str = f"{total_pred - total_actual:+.0f} vs. Ist ({int(total_actual)})" if total_actual is not None else None
-        st.metric("Prognose gesamt (Fahrten/h)", f"{total_pred:.0f}", delta=delta_str, delta_color="off")
+        delta_str = f"{total_pred - total_actual:+.0f} vs. Actual ({int(total_actual)})" if total_actual is not None else None
+        st.metric("Total Forecast (trips/h)", f"{total_pred:.0f}", delta=delta_str, delta_color="off")
     with col2.container(border=True):
-        st.metric("Ø pro Station (Fahrten/h)", f"{map_df['prediction'].mean():.2f}")
+        st.metric("Avg per Station (trips/h)", f"{map_df['prediction'].mean():.2f}")
     with col3.container(border=True):
         st.metric(
-            "Stunden-MAE (alle Stationen)",
+            "Hourly MAE (all stations)",
             f"{hour_mae:.2f}" if hour_mae is not None else "–",
         )
     with col4.container(border=True):
         st.metric(
-            "Stationen auf Karte",
+            "Stations on Map",
             f"{len(valid_map_df)} / {len(filtered_stations)}",
-            help=f"{missing_coords} Station(en) ohne GPS-Koordinaten",
+            help=f"{missing_coords} station(s) missing GPS coordinates",
         )
 
     map_col, top_col = st.columns([2.2, 1.0])
 
     with map_col:
-        st.subheader(f"Kartenansicht ({selected_date}, {selected_hour:02d}:00 Uhr)")
+        st.subheader(f"Map View ({selected_date}, {selected_hour:02d}:00)")
 
         center_lat = float(valid_map_df["lat"].mean()) if not valid_map_df.empty else 40.75
         center_lon = float(valid_map_df["lon"].mean()) if not valid_map_df.empty else -73.98
-        zoom_level = 11.0 if selected_borough == "Alle Stadtteile" else 12.2
+        zoom_level = 11.0 if selected_borough == "All Boroughs" else 12.2
 
         layers = []
-        if map_style in ["Fließende Heatmap-Welle", "Heatmap + Stationen"]:
+        if map_style in ["Smooth Heatmap Wave", "Heatmap + Stations"]:
             layers.append(
                 pdk.Layer(
                     "HeatmapLayer",
@@ -621,16 +621,16 @@ def main() -> None:
                 )
             )
 
-        if map_style in ["Stationspunkte", "Heatmap + Stationen"]:
+        if map_style in ["Station Points", "Heatmap + Stations"]:
             layers.append(
                 pdk.Layer(
                     "ScatterplotLayer",
                     data=valid_map_df,
                     get_position="[lon, lat]",
                     get_fill_color="color",
-                    get_radius=45 if map_style == "Heatmap + Stationen" else 55,
-                    radius_min_pixels=2 if map_style == "Heatmap + Stationen" else 3,
-                    radius_max_pixels=10 if map_style == "Heatmap + Stationen" else 12,
+                    get_radius=45 if map_style == "Heatmap + Stations" else 55,
+                    radius_min_pixels=2 if map_style == "Heatmap + Stations" else 3,
+                    radius_max_pixels=10 if map_style == "Heatmap + Stations" else 12,
                     pickable=True,
                 )
             )
@@ -647,12 +647,12 @@ def main() -> None:
                 "html": (
                     "<b>{station_name}</b><br/>"
                     "<span style='color:#cbd5e1;'>{borough} · ID: {station_id}</span><br/>"
-                    "Prognose: <b>{pred_label}</b> / h<br/>"
-                    "Ist-Wert: <b>{actual_label}</b> (Abw.: {diff_label})"
+                    "Forecast: <b>{pred_label}</b> / h<br/>"
+                    "Actual: <b>{actual_label}</b> (Error: {diff_label})"
                 ),
                 "style": {"backgroundColor": "#1e293b", "color": "white", "fontSize": "12px"},
             }
-            if map_style != "Fließende Heatmap-Welle"
+            if map_style != "Smooth Heatmap Wave"
             else None
         )
 
@@ -660,7 +660,7 @@ def main() -> None:
         render_legend(map_style)
 
     with top_col:
-        st.subheader(f"Top 10 ({selected_hour:02d}:00 Uhr)")
+        st.subheader(f"Top 10 Stations ({selected_hour:02d}:00)")
         top_df = (
             map_df[["station_name", "borough", "prediction", "pickups"]]
             .dropna(subset=["prediction"])
@@ -676,14 +676,14 @@ def main() -> None:
             height=485,
             column_config={
                 "station_name": st.column_config.TextColumn("Station"),
-                "borough": st.column_config.TextColumn("Bezirk"),
+                "borough": st.column_config.TextColumn("Borough"),
                 "prediction": st.column_config.ProgressColumn(
-                    "Prognose",
+                    "Forecast",
                     format="%.1f",
                     min_value=0.0,
                     max_value=max_val,
                 ),
-                "pickups": st.column_config.NumberColumn("Ist", format="%d"),
+                "pickups": st.column_config.NumberColumn("Actual", format="%d"),
             },
         )
 
@@ -694,12 +694,18 @@ def main() -> None:
         selected_borough=selected_borough,
     )
 
-    if play_wave:
-        curr_idx = available_hours.index(selected_hour)
-        next_idx = (curr_idx + 1) % len(available_hours)
-        st.session_state["selected_hour"] = available_hours[next_idx]
-        time.sleep(0.65)
-        st.rerun()
+    if play_wave and hasattr(st, "fragment"):
+        @st.fragment(run_every=1.0)
+        def _advance_wave() -> None:
+            if st.session_state.get("wave_ready", False):
+                curr_idx = available_hours.index(st.session_state["selected_hour"])
+                st.session_state["selected_hour"] = available_hours[(curr_idx + 1) % len(available_hours)]
+                st.session_state["wave_ready"] = False
+                st.rerun()
+            else:
+                st.session_state["wave_ready"] = True
+
+        _advance_wave()
 
 
 if __name__ == "__main__":
