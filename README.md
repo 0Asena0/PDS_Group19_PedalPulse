@@ -74,4 +74,4 @@ Steps: `download`, `load`, `aggregate`, `calendar`, `stations`, `cohort`, `grid`
 
 ## Licence
 
-The code is under the MIT licence. It does not cover the data. Trip data: Citi Bike System Data, Lyft Bikes and Scooters, LLC, under the [Citi Bike Data License Agreement](https://citibikenyc.com/data-sharing-policy); the derived files serve only to reproduce this non-commercial study and must not be passed on as a dataset of their own. Weather: [Open-Meteo](https://open-meteo.com), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Details in the data contract.
+The code is under the MIT licence. It does not cover the data. Trip data: Citi Bike System Data, Lyft Bikes and Scooters, LLC, under the [Citi Bike Data License Agreement](https://citibikenyc.com/data-sharing-policy); the release holds no trip records, only aggregated counts and station metadata, published as source material of this non-commercial study (Section 2(b)). Do not pass the files on as a dataset of their own. Weather: [Open-Meteo](https://open-meteo.com), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Details in the data contract.
