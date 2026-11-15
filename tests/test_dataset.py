@@ -70,11 +70,18 @@ def test_clipping_keeps_missing_values_missing():
 
 
 def test_repeated_fall_back_hour_is_not_observed():
-    frame = load_station_hours("sample", with_weather=False)
+    stations = ["6140.05", "5329.03"]
+    frame = load_station_hours("dev", with_weather=False, stations=stations,
+                               start_local="2024-11-03", end_local="2024-11-03")
     calendar = pd.read_parquet(config.RELEASE_DIR / "calendar.parquet")
-    repeated = calendar[(calendar["hour_local"] == 1) & (calendar["local_hours_in_day"] == 25)
-                        & (calendar["utc_offset_h"] == -5)]["hour_utc"]
-    assert len(repeated) == 3
-    marked = frame[frame["hour_utc"].isin(repeated)]
-    assert (marked["status"] != "observed").all()
-    assert (frame.loc[frame["status"] == "dst_repeat", "pickups"] == 0).all()
+    repeated_hours = calendar.loc[(calendar["hour_local"] == 1) & (calendar["local_hours_in_day"] == 25)
+                                  & (calendar["utc_offset_h"] == -5), "hour_utc"]
+    repeated = frame[frame["hour_utc"].isin(repeated_hours)]
+    assert len(frame) > 0 and len(repeated) > 0
+    assert (repeated["status"] == "dst_repeat").all()
+    assert (repeated["pickups"] == 0).all()
+    assert (frame.loc[frame["status"] != "dst_repeat", "hour_utc"].isin(repeated["hour_utc"]) == False).all()  # noqa: E712
+    kept = load_station_hours("dev", with_weather=False, stations=stations,
+                              start_local="2024-11-03", end_local="2024-11-03", observed_only=True)
+    assert len(kept) == len(frame) - len(repeated) - (frame["status"] == "inactive").sum()
+    assert not kept["hour_utc"].isin(repeated["hour_utc"]).any()
