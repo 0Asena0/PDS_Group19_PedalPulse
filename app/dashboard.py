@@ -14,17 +14,63 @@ ACTUALS_PATH = Path("data/processed/dummy_actuals.parquet")
 LOCAL_TZ = "America/New_York"
 
 
+def _normalize_station_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [c.strip() for c in df.columns]
+    lower_to_orig = {c.lower(): c for c in df.columns}
+
+    aliases = {
+        "station_id": ["station_id", "start_station_id", "id"],
+        "station_name": ["station_name", "start_station_name", "name"],
+        "lat": ["lat", "latitude", "start_lat", "station_lat", "y"],
+        "lon": ["lon", "lng", "longitude", "start_lng", "start_lon", "station_lng", "station_lon", "x"],
+        "borough": ["borough", "district", "neighborhood"],
+    }
+
+    rename_map = {}
+    for target, candidates in aliases.items():
+        if target in df.columns:
+            continue
+        for cand in candidates:
+            if cand in lower_to_orig:
+                rename_map[lower_to_orig[cand]] = target
+                break
+
+    return df.rename(columns=rename_map)
+
+
 @st.cache_data
 def load_stations(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    rename_map = {
-        "start_station_id": "station_id",
-        "start_station_name": "station_name",
-        "latitude": "lat",
-        "longitude": "lon",
-    }
-    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    df = _normalize_station_columns(pd.read_csv(path))
+
+    if "station_id" not in df.columns:
+        st.error(f"Spalte `station_id` fehlt in `{path}`. Gefundene Spalten: {list(df.columns)}")
+        st.stop()
+
     df["station_id"] = df["station_id"].astype(str)
+
+    # Falls Koordinaten nicht in cohort.csv stehen, in typischen Stationsdateien suchen
+    if "lat" not in df.columns or "lon" not in df.columns:
+        for alt_path in [Path("data/stations.csv"), Path("data/processed/stations.parquet")]:
+            if alt_path.exists():
+                alt_df = pd.read_parquet(alt_path) if alt_path.suffix == ".parquet" else pd.read_csv(alt_path)
+                alt_df = _normalize_station_columns(alt_df)
+                if {"station_id", "lat", "lon"}.issubset(alt_df.columns):
+                    alt_df["station_id"] = alt_df["station_id"].astype(str)
+                    df = df.drop(columns=[c for c in ["lat", "lon"] if c in df.columns]).merge(
+                        alt_df[["station_id", "lat", "lon"]].drop_duplicates("station_id"),
+                        on="station_id",
+                        how="left",
+                    )
+                    break
+
+    if "lat" not in df.columns or "lon" not in df.columns:
+        st.error(
+            f"Keine Koordinaten (`lat`/`lon`) in `{path}` gefunden. "
+            f"Vorhandene Spalten sind: `{list(df.columns)}`. "
+            "Bitte kopiere diese Spaltenliste kurz in den Chat!"
+        )
+        st.stop()
 
     if "station_name" not in df.columns:
         df["station_name"] = df["station_id"]
@@ -65,7 +111,6 @@ def load_forecasts(preds_path: Path, actuals_path: Path) -> pd.DataFrame:
 
 
 def assign_color(pred: float) -> list[int]:
-    # Feste Farbschritte über alle Stunden hinweg (RGBA)
     if pd.isna(pred):
         return [150, 150, 150, 160]
     if pred < 2.0:
@@ -101,7 +146,6 @@ def main() -> None:
     else:
         st.info(f"Historischer Backtest-Modus (`{data_mode}`) | Modell: `{model_version}`")
 
-    # Sidebar für Tag- und Stundenauswahl
     st.sidebar.header("Zeitauswahl (Ortszeit NYC)")
     available_dates = sorted(forecasts["local_date"].unique())
     selected_date = st.sidebar.selectbox("Zieltag", available_dates, index=0)
@@ -117,7 +161,6 @@ def main() -> None:
 
     hour_df = day_df[day_df["local_hour"] == selected_hour].copy()
 
-    # Metadaten zum gewählten Prognosezeitpunkt
     origin_utc = hour_df["origin_utc"].iloc[0]
     origin_local = origin_utc.tz_convert(LOCAL_TZ)
     target_utc = hour_df["target_start_utc"].iloc[0]
@@ -130,7 +173,6 @@ def main() -> None:
         f"**Modus:** {data_mode}"
     )
 
-    # Mit Stationskoordinaten verbinden (Left Join auf Kohorte)
     map_df = stations.merge(hour_df, on="station_id", how="left")
     missing_preds = int(map_df["prediction"].isna().sum())
     missing_coords = int(map_df[["lat", "lon"]].isna().any(axis=1).sum())
