@@ -21,7 +21,9 @@ A value from source hour h may be used for a target hour only if h + 1 hour <= `
 Raw trip times are naive local wall-clock times. They are localised to America/New_York and converted to UTC before aggregation.
 
 - Spring forward: local times 02:00 to 02:59 do not exist. They are read with the offset before the change and land at 03:00 to 03:59 EDT.
-- Fall back: local times 01:00 to 01:59 occur twice. They are assigned to the first occurrence (EDT, UTC-4). The second occurrence receives no trips. `tests/test_time.py` checks both rules.
+- Fall back: local times 01:00 to 01:59 occur twice. They are assigned to the first occurrence (EDT, UTC-4), so the second occurrence (EST) receives no pickups. `tests/test_time.py` checks both rules.
+- Trips across the repeated hour: a trip that starts in the first and ends in the second 01:00 hour has a local end time before its start. In `data-v1` these trips were dropped as `end_before_start`: all 1,123 trips of that rule (323 in 2023, 318 in 2024, 482 in 2025) are of this kind, none is a data error. Since the commit after `data-v1`, the pipeline moves such an end to the second occurrence and keeps the trip (`tests/test_trips.py`).
+- In `data-v1` the second occurrence of 01:00 on the three fall-back nights is a structural zero for every station (6,069 rows, 5,871 of them `observed`). `load_station_hours` labels these rows `dst_repeat`, later builds store that status directly. Exclude them from training and evaluation like `inactive` rows.
 
 Cleaning drops a trip only for: duplicate `ride_id`, missing start station, unparsable start or end time, end before start, start outside the study period. There is no duration filter. `filter_log.parquet` holds the count per rule and month.
 
@@ -39,13 +41,16 @@ One row per cohort station and UTC hour, from the station's first observed trip 
 | `hour_local` | int8 | local hour 0 to 23 |
 | `pickups` | int32 | trips starting at the station in this hour (target) |
 | `dropoffs` | int32 | trips ending at the station in this hour, by end time |
-| `status` | string | `observed` or `inactive` |
+| `status` | string | `observed` or `inactive`; `load_station_hours` and later builds add `dst_repeat` |
 
 - `dev`: local dates 2023-01-01 to 2025-09-30. `holdout`: 2025-10-01 to 2026-03-31. The files do not overlap and together cover the full grid.
 - EDA and every modelling decision use only `dev`. Decisions about the sample itself (cohort, station attributes) use only data up to 2024-09-30.
 - `status = observed`: the count is real, including true zeros.
 - `status = inactive`: the hour lies on a local day that is part of a run of at least 3 consecutive local days without any pickup or dropoff at the station. These hours stay in the table so that the grid is complete.
+- `status = dst_repeat`: second occurrence of the repeated fall-back hour, zero by construction (see above).
+- In `data-v1` a run of empty days may cross the split date. This affects one station-day: station `7935.07` on 2025-09-30 (24 development rows) is `inactive` only because the run continues into October. Later builds end every run at the split date, so development status never depends on holdout data.
 - `status` is label cleaning, not a feature. It uses information from the whole run, including days after the hour, and must not be used as a model input. Use it to exclude or down-weight training and evaluation rows.
+- `pickups` and `dropoffs` of the target hour are labels. Neither is known at the origin. As features, only values of complete source hours are allowed (rule above, for example `lag_24h`); a same-hour `dropoffs` value is leakage. `load_station_hours` returns both columns, so the feature list must name allowed columns explicitly.
 - `dropoffs` of trips that end at or after 2026-04-01 04:00 UTC (the end of the last grid hour) are not counted. Trips that started in 2022 are outside the study period, so dropoffs in the first hours of 2023-01-01 are slightly too low.
 
 ### `dev_sample_manhattan_2024_summer.parquet`
@@ -62,7 +67,7 @@ One row per station ID seen in the cleaned trips.
 | `name` | string | most frequent name in trip starts and ends up to 2024-09-30 (stations opened later: over all data) |
 | `n_names` | int | number of distinct names seen for the ID |
 | `lat`, `lng` | float64 | median start coordinates of classic-bike trips up to 2024-09-30 |
-| `coord_source` | string | `classic_starts_to_cutoff`; fallback `classic_starts_after_cutoff` or `all_trip_ends` when there is no such trip |
+| `coord_source` | string | `classic_starts_to_cutoff`; fallback `classic_starts_after_cutoff`, then `all_trip_ends`. Despite its name, the last fallback uses all start and end coordinates of non-classic trips and trip ends (97 stations, none in the cohort) |
 | `borough` | string | Manhattan, Brooklyn, Queens, Bronx, Staten Island, or `Outside NYC` |
 | `borough_method` | string | `inside` (point in polygon), `nearest_within_500m` (point on a pier or shore line), `outside`, `no_coordinates` |
 | `first_seen_utc`, `last_seen_utc` | timestamp UTC | first and last trip start or end at the station |
@@ -81,7 +86,7 @@ The frozen cohort (also tracked in the repository as `data/cohort.csv`): `statio
 
 ### `station_name_changes.parquet`
 
-Log of IDs with more than one name (`id_with_several_names`) and names with more than one ID (`name_with_several_ids`). Columns: `change_type`, `station_id`, `name` (strings), `n` (int64, trips), `first_seen_local`, `last_seen_local` (naive local timestamps). One row per ID and name pair and change type; no nulls.
+Log of IDs with more than one name (`id_with_several_names`) and names with more than one ID (`name_with_several_ids`). Columns: `change_type`, `station_id`, `name` (strings), `n` (int64, number of trip endpoints with this ID and name; a trip that starts and ends at the same station counts twice), `first_seen_local`, `last_seen_local` (naive local timestamps). One row per ID and name pair and change type; no nulls.
 
 ### `calendar.parquet`
 
@@ -108,7 +113,7 @@ One row per UTC hour of the study period.
 
 Day-ahead forecast for one point, Central Park (40.7812, -73.9665), from the Open-Meteo Previous Runs API with the `_previous_day2` lead. Units: degrees Celsius, mm, km/h, percent.
 
-In `data-v1`, 19 of 28,463 hours carry model values just outside the physical range: `cloud_cover` -1 (5 hours) or 101 (8 hours) and `precipitation` -0.1 (6 hours). These are rounding artefacts of the weather models. `load_station_hours` clips them to 0 to 100 percent and to at least 0 mm; when reading the file directly, clip the same way. The pipeline clips them for later builds.
+In `data-v1`, 19 of 28,463 hours carry model values just outside the physical range: `cloud_cover` -1 (5 hours) or 101 (8 hours) and `precipitation` -0.1 (6 hours). These are rounding artefacts of the weather models. `load_station_hours` clips them to 0 to 100 percent and to at least 0 mm and keeps missing values missing; when reading the file directly, clip the same way. The pipeline clips them for later builds.
 
 | column | type | meaning |
 |---|---|---|
@@ -135,6 +140,7 @@ Per month (`month`, string `YYYY-MM`, key), all int64 without nulls: `raw_rows`,
 
 ## Licences
 
-- Trip data: Citi Bike System Data, Lyft Bikes and Scooters, LLC, under the Citi Bike data licence agreement. The licence (section 2b) does not allow distributing the data as a stand-alone dataset, so the release stays inside this private repository.
-- Weather: Open-Meteo, CC BY 4.0.
+- Code: MIT (`LICENSE`). The MIT licence covers the code only, not the data files.
+- Trip data: Citi Bike System Data, Lyft Bikes and Scooters, LLC, under the Citi Bike Data License Agreement (https://citibikenyc.com/data-sharing-policy). Section 2(b) forbids hosting or distributing the data as a stand-alone dataset and allows them as source material in non-commercial analyses, reports or studies. The release files are derived from the trips and serve only to reproduce this non-commercial course study. Do not pass them on as a dataset of their own. The licence has no exception for private repositories; whether a public release is covered by the study exception is not settled.
+- Weather: Open-Meteo (https://open-meteo.com), CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Changes: one grid point, model selection per hour (GFS, else JMA), lead `previous_day2`, clipping to the physical range, aggregation to local days in the EDA.
 - Borough boundaries: NYC Open Data, NYC Department of City Planning.

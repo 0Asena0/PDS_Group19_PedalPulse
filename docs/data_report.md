@@ -26,11 +26,13 @@ Cleaning removed 0.06 % of the raw rows:
 
 The 275 trips outside the period are in the January 2023 file and started in December 2022.
 
+All 1,123 trips dropped as "end before start" lie in the repeated 01:00 hour of a fall-back night (323 in November 2023, 318 in November 2024, 482 in November 2025). They start in the first and end in the second 01:00 hour, so their local end time is earlier than the start; they are valid trips, not data errors. `data-v1` drops them. The pipeline now keeps them (decision E15); the effect is 0.0009 % of all trips.
+
 Kept trips that need care:
 
 - 347,032 trips (0.26 %) have no end station. They count as pickups and do not appear in `dropoffs`.
 - 3,077,947 trips had a station ID written in a second format (`6313.1` for `6313.10`, or a trailing underscore) and were mapped to the operator's format.
-- 9,441 trips started in the repeated hour of a fall-back night and were assigned to its first occurrence (EDT). No trip time falls into the non-existent spring-forward hour.
+- 9,441 trips started in the repeated hour of a fall-back night and were assigned to its first occurrence (EDT). The second occurrence therefore has zero pickups at every station (6,069 rows, 5,871 of them `observed` in `data-v1`); the loader labels them `dst_repeat`. No trip time falls into the non-existent spring-forward hour.
 
 Duration sensitivity: 48,661 kept trips (0.037 %) last less than 1 minute or more than 24 hours, almost all of them more than 24 hours; only 5 trips are shorter than a minute. A 1 minute to 24 hour filter would therefore change the hourly counts very little. The default keeps all of them.
 
@@ -40,7 +42,7 @@ Sum check: for each of the 39 months, raw rows equal kept rows plus the dropped 
 
 - 2,478 station IDs appear in the cleaned trips. 16 of them are test, workshop or depot locations (IDs such as `SYS016` Morgan Bike Mechanics, `Shop Morgan`, `Lab - NYC`, `LA Metro Demo 1`); the full list is in `reports/data_summary.json`.
 - Cohort size for the activity rule (at least one pickup on the given share of local days from 2024-07-01 to 2024-09-30): 2,122 stations at 50 %, 2,072 at 80 %, 2,004 at 95 %. The cohort uses 80 %.
-- Six non-public locations would have passed the 80 % rule and are excluded: `Lab - NYC`, `Lab - NYC - Monolith`, `SYS016`, `SYS033`, `SYS038`, `Shop Morgan`.
+- Six non-public locations had pickups in the selection window: `Lab - NYC` (1 of 92 days), `Lab - NYC - Monolith` (5), `SYS016` (91), `SYS033` (15), `SYS038` (49) and `Shop Morgan` (82). Two of them, `SYS016` and `Shop Morgan`, would have passed the 80 % rule (74 days); all six are excluded.
 - Cohort by borough: Brooklyn 679, Manhattan 651, Queens 432, Bronx 310. No station in the data lies on Staten Island.
 - Borough assignment for all 2,478 IDs: 2,383 inside a borough polygon, 1 within 500 m of one (`SYS028`, a non-public location), 94 outside New York City (90 Jersey City and Hoboken stations reached by trips from New York, plus four non-public IDs). No cohort station is outside the city.
 - 75 IDs have more than one name and 37 names have more than one ID over the study period (`station_name_changes.parquet`).
@@ -55,7 +57,7 @@ Sum check: for each of the 39 months, raw rows equal kept rows plus the dropped 
 | `station_hours_holdout` | 9,050,496 | 2,072 | 2025-10-01 04:00 | 2026-04-01 03:00 | 8.8 MB |
 | `dev_sample_manhattan_2024_summer` | 1,432,053 | 651 | 2024-06-01 | 2024-08-31 (local) | 2.0 MB |
 
-- Inactive hours: 1.36 % of the dev rows and 4.47 % of the holdout rows. 1,063 cohort stations have at least one inactive run; together these runs cover 43,623 station-days.
+- Inactive hours: 1.36 % of the dev rows and 4.47 % of the holdout rows. 1,063 cohort stations have at least one inactive run; together these runs cover 43,623 station-days. One run crosses the split date: station `7935.07` is `inactive` on 2025-09-30 (24 dev rows) only because the empty run continues into October. Later builds end runs at the split date (E15).
 - In the holdout the inactive share rises from 3.6 % in October 2025 to 6.3 % in February 2026. 41 cohort stations are inactive for the whole of March 2026 and may have closed; this cannot be checked from the trip files.
 - Share of observed hours with zero pickups: 48.2 % in dev and 55.7 % in holdout, which covers only autumn and winter months.
 - Pickups per observed station-hour in dev: median 1, 99th percentile 22, maximum 216.
@@ -71,7 +73,7 @@ The Open-Meteo Previous Runs API returned these shares of hours with values (`_p
 | GFS (`gfs_seamless`) | temperature 99 %, other variables 0 % | 95 % for all four | 100 % | 100 % |
 | JMA GSM (`jma_gsm`) | 100 % | 100 % | 100 % | 100 % |
 
-GFS has no precipitation, wind or cloud cover before 2024-01-20 11:00 UTC. The forecast file therefore uses JMA GSM for all of 2023 and 463 hours of January 2024, and GFS from then on. No forecast hour and no observed hour is missing.
+GFS has precipitation, wind and cloud cover only from 2024-01-20 12:00 UTC. The forecast file therefore uses JMA GSM for all of 2023 and for 468 hours of January 2024 (up to 2024-01-20 11:00 UTC), and GFS from then on. No forecast hour and no observed hour is missing.
 
 Mean absolute difference between the day-2 forecast and ERA5 at the same point: 1.48 degrees C for temperature, 0.15 mm for hourly precipitation, 3.88 km/h for wind speed, 22.9 percentage points for cloud cover. The model change in January 2024 means the forecast error is not constant over the period.
 
@@ -81,4 +83,5 @@ Mean absolute difference between the day-2 forecast and ERA5 at the same point: 
 - The `inactive` rule needs three days without any trip. Shorter outages stay `observed` with zero counts, and a station that moves to a new ID looks like a closure followed by a new station.
 - The cohort is fixed on summer 2024 activity. Stations opened later are not in the panel, and stations that closed later stay in it with inactive hours.
 - Weather is one point for the whole city.
+- Local hour 01:00 on the three fall-back nights exists twice; trip starts in it cannot be split between the two occurrences, because the files carry no UTC offset.
 - Station coordinates and names are taken from trip records, not from an official station register.

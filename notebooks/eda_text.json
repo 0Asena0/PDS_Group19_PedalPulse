@@ -5,7 +5,7 @@
   },
   "coverage": {
     "title": "2. Coverage, zeros and inactive hours",
-    "text": "The number of cohort stations in the grid grows from 1,607 in January 2023 to all 2,072 from December 2024, because each station enters the grid with its first trip. Of the observed station-hours, 49.0 % have zero pickups, about 56 % in winter months and 41 % in summer months. Inactive hours are 1.2 % of the EDA window and peak at 2.7 % in September 2023; the rule cannot tell a closure from a station that moved to a new ID."
+    "text": "The number of cohort stations in the grid grows from 1,607 in January 2023 to all 2,072 from July 2024 (the last cohort station opened on 19 July 2024), because each station enters the grid with its first trip. Of the observed station-hours, 49.0 % have zero pickups, about 58 % in winter (December to February) and 41 % in summer (June to August). Inactive hours are 1.2 % of the EDA window and peak at 2.7 % in September 2023; the rule cannot tell a closure from a station that moved to a new ID."
   },
   "count_distribution": {
     "title": "3. Distribution of hourly pickups",
@@ -33,7 +33,7 @@
   },
   "weather": {
     "title": "9. Temperature and precipitation (observed weather, descriptive)",
-    "text": "Daily trips and daily mean temperature correlate at 0.74; the median day has 58,000 trips at or below 0 degrees C and 164,000 above 30 degrees C. Days with more than 5 mm of rain have a median of 77,000 trips against 116,000 on dry days. Temperature and season move together, so these figures do not separate the two effects, and the weather is observed ERA5 data that a day-ahead forecast would not have."
+    "text": "Daily trips and daily mean temperature correlate at 0.74; the median day has 58,000 trips at or below 0 degrees C and 164,000 above 30 degrees C. Days with more than 5 mm of rain have a median of 77,000 trips against 116,000 on dry days (at most 0.1 mm). Temperature and season move together, so these figures do not separate the two effects, and the weather is observed ERA5 data that a day-ahead forecast would not have."
   },
   "holidays": {
     "title": "10. Holidays",

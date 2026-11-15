@@ -30,6 +30,8 @@ df = load_station_hours("dev", start_local="2024-01-01", end_local="2024-12-31",
 
 Splits are `sample`, `dev` and `holdout`. The full `dev` split with all columns needs several GB of RAM, so filter by date or `stations=[...]` where possible.
 
+`load_station_hours` returns `pickups` and `dropoffs` of the target hour; both are labels and must not be used as features. With `observed_only=True` it drops `inactive` hours and the repeated 01:00 hour of fall-back nights (`dst_repeat`).
+
 Columns, types and rules are in [`docs/data_contract.md`](docs/data_contract.md). Work only against this contract. EDA and all modelling decisions use `station_hours_dev`; `station_hours_holdout` is for the final evaluation only.
 
 ## Data files (release data-v1)
@@ -52,7 +54,7 @@ Full checksums are in `SHA256SUMS` in the release. Sources, download dates and a
 
 ## Rebuilding the data
 
-The pipeline downloads about 19 GB of trip archives and needs about 6 GB of disk for intermediate files. Data goes to `data/` (ignored by git) unless `PEDALPULSE_DATA` points elsewhere.
+The pipeline downloads about 20 GB (19 GiB) of trip archives and needs about 6 GB of disk for intermediate files. Data goes to `data/` (ignored by git) unless `PEDALPULSE_DATA` points elsewhere.
 
 ```bash
 uv run python -m pedalpulse all                      # every step in order
@@ -60,7 +62,7 @@ uv run python -m pedalpulse load --months 2024-07    # one step for one month
 uv run pytest                                        # tests, including checks on the outputs
 ```
 
-Steps: `download`, `load`, `aggregate`, `calendar`, `stations`, `cohort`, `grid`, `weather`, `export`, `report` (`all` runs them in this order; `verify` only checks downloaded release files). Each step skips outputs that already exist; `--force` rebuilds them. `scripts/publish_release.sh` uploads the release files.
+Steps: `download`, `load`, `aggregate`, `calendar`, `stations`, `cohort`, `grid`, `weather`, `export`, `report` (`all` runs them in this order; `verify` only checks downloaded release files). Each step skips outputs that already exist; `--force` rebuilds them. The code after the tag `data-v1` contains corrections (see `docs/decisions.md`, E15); `git checkout data-v1` rebuilds the release exactly. `scripts/publish_release.sh` uploads the release files.
 
 ## Documentation
 
@@ -69,3 +71,7 @@ Steps: `download`, `load`, `aggregate`, `calendar`, `stations`, `cohort`, `grid`
 - [`docs/data_report.md`](docs/data_report.md): data quality report with the numbers of the run
 - [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb): exploratory analysis on the dev file; figures in `reports/figures/`
 - [`docs/genai_log.md`](docs/genai_log.md): use of generative AI
+
+## Licence
+
+The code is under the MIT licence. It does not cover the data. Trip data: Citi Bike System Data, Lyft Bikes and Scooters, LLC, under the [Citi Bike Data License Agreement](https://citibikenyc.com/data-sharing-policy); the derived files serve only to reproduce this non-commercial study and must not be passed on as a dataset of their own. Weather: [Open-Meteo](https://open-meteo.com), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Details in the data contract.

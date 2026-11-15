@@ -29,3 +29,9 @@ E12. Laptop file. Cohort stations in Manhattan, 2024-06-01 to 2024-08-31, below 
 E13. Data exchange. All Parquet files (zstd) and `SHA256SUMS` are attached to the GitHub release `data-v1`. No data in the git history; only `data/manifest.csv` and `data/cohort.csv` are tracked.
 
 E14. Language. Code, documentation, commits and notebook in English.
+
+E15. Corrections after `data-v1`. An audit on 2026-11-15 found four problems in the pipeline. They are fixed in the code; the release files stay unchanged until the group agrees on a new version, so `data-v1` is rebuilt exactly only from the tag `data-v1`.
+- Trips across the repeated fall-back hour (local end before local start) were dropped as `end_before_start`: 1,123 trips, 0.0009 % of all trips. The pipeline now moves the end to the second occurrence and keeps them.
+- The second occurrence of 01:00 on fall-back nights is a structural zero. It now gets `status = dst_repeat`; `load_station_hours` applies the same label to `data-v1`.
+- Inactive runs could cross the split date, so one development station-day depended on holdout data. Runs now end at the split date.
+- An interrupted grid build was taken as finished on the next run. The grid now writes a completion marker last and is rebuilt when it is missing. The loader's clipping kept turning missing weather into zeros; it now keeps missing values missing.
