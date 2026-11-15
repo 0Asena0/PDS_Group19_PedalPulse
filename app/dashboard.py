@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
+from urllib.parse import quote
 from urllib.request import urlretrieve
 import altair as alt
 import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="PedalPulse – NYC Citi Bike Demand Forecast",
@@ -37,7 +39,17 @@ ACTUALS_PATH = (
 )
 LOCAL_TZ = "America/New_York"
 WEEKDAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-WAVE_PROGRESS_STEPS = [0.20, 0.52, 0.84]
+
+BIKE_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">'
+    '<circle cx="32" cy="32" r="30" fill="#ffffff" stroke="#ea580c" stroke-width="4"/>'
+    '<circle cx="20" cy="40" r="8" fill="none" stroke="#1e293b" stroke-width="3.2"/>'
+    '<circle cx="44" cy="40" r="8" fill="none" stroke="#1e293b" stroke-width="3.2"/>'
+    '<path d="M20 40 L29 27 L39 27 L44 40 M29 27 L33 40 L20 40 M37 22 L42 22 M26 24 L31 24" '
+    'fill="none" stroke="#ea580c" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>'
+    '</svg>'
+)
+BIKE_ICON_URL = "data:image/svg+xml;charset=utf-8," + quote(BIKE_SVG)
 
 
 def _normalize_station_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -258,8 +270,8 @@ def assign_color(pred: float) -> list[int]:
 def build_bike_flows(
     valid_map_df: pd.DataFrame,
     prev_hour_df: pd.DataFrame,
-    progress_t: float,
-    max_flows: int = 22,
+    progress_t: float = 0.55,
+    max_flows: int = 20,
 ) -> pd.DataFrame:
     if valid_map_df.empty or prev_hour_df.empty:
         return pd.DataFrame()
@@ -272,7 +284,6 @@ def build_bike_flows(
     df["prev_pred"] = df["prev_pred"].fillna(0.0)
     df["delta"] = df["prediction"] - df["prev_pred"]
 
-    # Origins (A): stations cooling down or lower-surge feeder stations
     origins = df[df["delta"] < -0.15].sort_values("delta", ascending=True).head(max_flows * 2)
     if len(origins) < max_flows:
         fallback_origins = (
@@ -282,7 +293,6 @@ def build_bike_flows(
         )
         origins = pd.concat([origins, fallback_origins]).drop_duplicates("station_id").head(max_flows * 2)
 
-    # Destinations (B): stations surging in demand right now
     dests = df[df["delta"] > 0.15].sort_values("delta", ascending=False).head(max_flows * 2)
     if len(dests) < max_flows:
         fallback_dests = df.sort_values("prediction", ascending=False).head(max_flows * 2)
@@ -301,7 +311,6 @@ def build_bike_flows(
         if d_row["station_id"] in used_dests:
             continue
 
-        # Pair with an origin at reasonable riding distance so arcs & bikes look crisp
         candidates = origins[
             (~origins["station_id"].isin(used_origins))
             & (origins["station_id"] != d_row["station_id"])
@@ -320,28 +329,305 @@ def build_bike_flows(
         lon_a, lat_a = float(o_row["lon"]), float(o_row["lat"])
         lon_b, lat_b = float(d_row["lon"]), float(d_row["lat"])
 
-        # Interpolate bicycle position along the A -> B arc
         lon_bike = lon_a + progress_t * (lon_b - lon_a)
-        lat_bike = lat_a + progress_t * (lat_b - lat_a) + 0.0025 * float(np.sin(np.pi * progress_t))
+        lat_bike = lat_a + progress_t * (lat_b - lat_a) + 0.0020 * float(np.sin(np.pi * progress_t))
 
         surge = max(float(d_row["delta"]), 0.5)
         rows.append(
             {
-                "from_name": o_row["station_name"],
-                "to_name": d_row["station_name"],
+                "from_name": str(o_row["station_name"]),
+                "to_name": str(d_row["station_name"]),
                 "lon_a": lon_a,
                 "lat_a": lat_a,
                 "lon_b": lon_b,
                 "lat_b": lat_b,
                 "lon_bike": lon_bike,
                 "lat_bike": lat_bike,
-                "icon": "🚲",
-                "surge": surge,
-                "arc_width": min(2.0 + surge * 0.35, 6.5),
+                "icon_data": {
+                    "url": BIKE_ICON_URL,
+                    "width": 64,
+                    "height": 64,
+                    "anchorX": 32,
+                    "anchorY": 32,
+                },
+                "surge": round(surge, 1),
+                "arc_width": min(2.0 + surge * 0.35, 6.0),
             }
         )
 
     return pd.DataFrame(rows)
+
+
+def render_smooth_wave_player(
+    filtered_stations: pd.DataFrame,
+    day_df: pd.DataFrame,
+    available_hours: list[int],
+    selected_date: object,
+    selected_borough: str,
+    map_style: str,
+    show_bike_flows: bool,
+    center_lat: float,
+    center_lon: float,
+    zoom_level: float,
+) -> None:
+    valid_st = filtered_stations.dropna(subset=["lat", "lon"]).copy()
+    if valid_st.empty:
+        st.info("No stations with coordinates in this selection.")
+        return
+
+    hourly_frames = []
+    for idx, h in enumerate(available_hours):
+        h_df = day_df[day_df["local_hour"] == h]
+        prev_h = available_hours[(idx - 1) % len(available_hours)]
+        prev_df = day_df[day_df["local_hour"] == prev_h]
+
+        merged = valid_st[["station_id", "station_name", "lat", "lon"]].merge(
+            h_df[["station_id", "prediction"]], on="station_id", how="left"
+        )
+        pts = [
+            [round(float(r.lon), 5), round(float(r.lat), 5), round(float(r.prediction or 0.0), 2)]
+            for r in merged.itertuples()
+        ]
+
+        flows_list = []
+        if show_bike_flows:
+            f_df = build_bike_flows(merged, prev_df, progress_t=0.5, max_flows=18)
+            for f in f_df.itertuples():
+                flows_list.append(
+                    {
+                        "lon_a": round(float(f.lon_a), 5),
+                        "lat_a": round(float(f.lat_a), 5),
+                        "lon_b": round(float(f.lon_b), 5),
+                        "lat_b": round(float(f.lat_b), 5),
+                        "arc_width": round(float(f.arc_width), 2),
+                        "from_name": f.from_name,
+                        "to_name": f.to_name,
+                    }
+                )
+
+        hourly_frames.append(
+            {
+                "hour_label": f"{h:02d}:00",
+                "total_trips": round(float(merged["prediction"].fillna(0.0).sum())),
+                "points": pts,
+                "flows": flows_list,
+            }
+        )
+
+    payload_json = json.dumps(
+        {
+            "frames": hourly_frames,
+            "bikeIconUrl": BIKE_ICON_URL,
+            "mapStyle": map_style,
+            "showBikeFlows": show_bike_flows,
+            "centerLat": center_lat,
+            "centerLon": center_lon,
+            "zoom": zoom_level,
+            "dateStr": str(selected_date),
+            "borough": selected_borough,
+        }
+    )
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <script src="https://unpkg.com/deck.gl@8.9.33/dist.min.js"></script>
+      <style>
+        body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; }}
+        #wrap {{ position: relative; width: 100%; height: 500px; border-radius: 10px; overflow: hidden; }}
+        #deck-canvas {{ width: 100%; height: 100%; }}
+        #hud {{
+          position: absolute; top: 12px; left: 12px; right: 12px; z-index: 10;
+          display: flex; align-items: center; justify-content: space-between; gap: 12px;
+          background: rgba(15, 23, 42, 0.86); backdrop-filter: blur(6px);
+          color: #f8fafc; padding: 10px 14px; border-radius: 10px;
+          border: 1px solid rgba(148, 163, 184, 0.25); font-size: 13px;
+        }}
+        .pill {{
+          background: #ea580c; color: #fff; font-weight: 700;
+          padding: 4px 10px; border-radius: 999px; font-variant-numeric: tabular-nums;
+        }}
+        button {{
+          background: #2563eb; color: #fff; border: none; border-radius: 6px;
+          padding: 5px 11px; font-weight: 600; cursor: pointer; font-size: 12px;
+        }}
+        button:hover {{ background: #1d4ed8; }}
+        input[type=range] {{ accent-color: #ea580c; cursor: pointer; width: 150px; }}
+      </style>
+    </head>
+    <body>
+      <div id="wrap">
+        <div id="hud">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button id="toggle-btn">⏸ Pause</button>
+            <span class="pill" id="clock-lbl">00:00</span>
+            <span id="trips-lbl" style="color:#cbd5e1;">0 trips/h</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="color:#94a3b8;font-size:12px;">Speed</span>
+            <input id="speed-slider" type="range" min="0.4" max="2.5" step="0.1" value="1.0" />
+          </div>
+        </div>
+        <canvas id="deck-canvas"></canvas>
+      </div>
+
+      <script>
+        const DATA = {payload_json};
+        const frames = DATA.frames;
+        let playing = true;
+        let speed = 1.0;
+        let simTime = 8.0; // start at 08:00
+        let lastTs = performance.now();
+
+        const clockLbl = document.getElementById("clock-lbl");
+        const tripsLbl = document.getElementById("trips-lbl");
+        const toggleBtn = document.getElementById("toggle-btn");
+        const speedSlider = document.getElementById("speed-slider");
+
+        toggleBtn.onclick = () => {{
+          playing = !playing;
+          toggleBtn.textContent = playing ? "⏸ Pause" : "▶ Play";
+        }};
+        speedSlider.oninput = (e) => {{
+          speed = parseFloat(e.target.value);
+        }};
+
+        const deckgl = new deck.Deck({{
+          canvas: "deck-canvas",
+          initialViewState: {{
+            latitude: DATA.centerLat,
+            longitude: DATA.centerLon,
+            zoom: DATA.zoom,
+            pitch: DATA.showBikeFlows ? 26 : 0,
+            bearing: 0
+          }},
+          controller: true,
+          layers: []
+        }});
+
+        function getColor(w) {{
+          if (w < 2) return [65, 182, 196, 200];
+          if (w < 6) return [44, 127, 184, 215];
+          if (w < 12) return [253, 174, 97, 230];
+          if (w < 20) return [244, 109, 67, 240];
+          return [215, 48, 39, 250];
+        }}
+
+        function renderFrame(now) {{
+          const dt = (now - lastTs) / 1000.0;
+          lastTs = now;
+          if (playing) {{
+            simTime = (simTime + dt * 0.42 * speed) % frames.length;
+          }}
+
+          const idxA = Math.floor(simTime) % frames.length;
+          const idxB = (idxA + 1) % frames.length;
+          const alpha = simTime - Math.floor(simTime); // smooth 0 -> 1 interpolation within the hour
+
+          const fA = frames[idxA];
+          const fB = frames[idxB];
+
+          const interpTrips = Math.round(fA.total_trips * (1 - alpha) + fB.total_trips * alpha);
+          clockLbl.textContent = `${{DATA.dateStr}} · ${{fA.hour_label}}`;
+          tripsLbl.textContent = `${{interpTrips.toLocaleString()}} trips/h (${{DATA.borough}})`;
+
+          // Smoothly blend station weights between hour idxA and idxB
+          const blendedPoints = fA.points.map((p, i) => {{
+            const wB = fB.points[i] ? fB.points[i][2] : p[2];
+            const w = p[2] * (1 - alpha) + wB * alpha;
+            return {{ lon: p[0], lat: p[1], weight: w }};
+          }});
+
+          const layers = [
+            new deck.TileLayer({{
+              id: "basemap",
+              data: "https://basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}.png",
+              minZoom: 0,
+              maxZoom: 19,
+              tileSize: 256,
+              renderSubLayers: props => {{
+                const {{ bbox: {{ west, south, east, north }} }} = props.tile;
+                return new deck.BitmapLayer(props, {{
+                  data: null,
+                  image: props.data,
+                  bounds: [west, south, east, north]
+                }});
+              }}
+            }})
+          ];
+
+          if (DATA.mapStyle === "Smooth Heatmap Wave" || DATA.mapStyle === "Heatmap + Stations") {{
+            layers.push(new deck.HeatmapLayer({{
+              id: "heat-wave",
+              data: blendedPoints,
+              getPosition: d => [d.lon, d.lat],
+              getWeight: d => d.weight,
+              radiusPixels: 48,
+              intensity: 1.35,
+              threshold: 0.04,
+              opacity: 0.82
+            }}));
+          }}
+
+          if (DATA.mapStyle === "Station Points" || DATA.mapStyle === "Heatmap + Stations") {{
+            layers.push(new deck.ScatterplotLayer({{
+              id: "station-pts",
+              data: blendedPoints,
+              getPosition: d => [d.lon, d.lat],
+              getFillColor: d => getColor(d.weight),
+              getRadius: 45,
+              radiusMinPixels: 2.5,
+              radiusMaxPixels: 10
+            }}));
+          }}
+
+          if (DATA.showBikeFlows && fB.flows.length > 0) {{
+            // Continuous bicycle travel along A -> B arcs (2 bike waves per hour for lively motion)
+            const tBike = (alpha * 1.5) % 1.0;
+            const bikes = fB.flows.map(fl => {{
+              const lon = fl.lon_a + tBike * (fl.lon_b - fl.lon_a);
+              const lat = fl.lat_a + tBike * (fl.lat_b - fl.lat_a) + 0.0020 * Math.sin(Math.PI * tBike);
+              return {{ lon, lat }};
+            }});
+
+            layers.push(new deck.ArcLayer({{
+              id: "flow-arcs",
+              data: fB.flows,
+              getSourcePosition: d => [d.lon_a, d.lat_a],
+              getTargetPosition: d => [d.lon_b, d.lat_b],
+              getSourceColor: [56, 189, 248, 175],
+              getTargetColor: [249, 115, 22, 230],
+              getWidth: d => d.arc_width
+            }}));
+
+            layers.push(new deck.IconLayer({{
+              id: "moving-bikes",
+              data: bikes,
+              getPosition: d => [d.lon, d.lat],
+              getIcon: () => ({{
+                url: DATA.bikeIconUrl,
+                width: 64,
+                height: 64,
+                anchorX: 32,
+                anchorY: 32
+              }}),
+              getSize: 28,
+              sizeUnits: "pixels"
+            }}));
+          }}
+
+          deckgl.setProps({{ layers }});
+          requestAnimationFrame(renderFrame);
+        }}
+
+        requestAnimationFrame(renderFrame);
+      </script>
+    </body>
+    </html>
+    """
+    components.html(html_code, height=505)
 
 
 def render_methodology_expander() -> None:
@@ -709,24 +995,15 @@ def main() -> None:
     day_df_all = forecasts[forecasts["local_date"] == selected_date]
     available_hours = sorted(day_df_all["local_hour"].unique())
 
-    if "selected_hour" not in st.session_state:
-        st.session_state["selected_hour"] = available_hours[min(8, len(available_hours) - 1)]
-    if st.session_state["selected_hour"] not in available_hours:
-        st.session_state["selected_hour"] = available_hours[0]
-    if "wave_substep" not in st.session_state:
-        st.session_state["wave_substep"] = 1
+    play_wave = st.sidebar.toggle("▶ Smooth 24h Live Wave (60 FPS)", value=False)
 
     selected_hour = st.sidebar.select_slider(
-        "Target Hour (Start)",
+        "Target Hour (Static Snapshot)",
         options=available_hours,
-        key="selected_hour",
+        value=available_hours[min(8, len(available_hours) - 1)],
         format_func=lambda h: f"{h:02d}:00",
+        disabled=play_wave,
     )
-
-    play_wave = st.sidebar.toggle("▶ Play 24h Demand Wave", value=False)
-    if not play_wave:
-        st.session_state["wave_ready"] = False
-        st.session_state["wave_substep"] = 1
 
     show_bike_flows = st.sidebar.toggle("🚲 Show A→B Bike Flows", value=True)
 
@@ -757,7 +1034,6 @@ def main() -> None:
     day_df = day_df_all[day_df_all["station_id"].isin(filtered_ids)]
     hour_df = day_df[day_df["local_hour"] == selected_hour].copy()
 
-    # Previous hour slice for A -> B demand shift calculation
     curr_hour_idx = available_hours.index(selected_hour)
     prev_hour = available_hours[(curr_hour_idx - 1) % len(available_hours)]
     prev_hour_df = day_df[day_df["local_hour"] == prev_hour].copy()
@@ -848,108 +1124,105 @@ def main() -> None:
     map_col, top_col = st.columns([2.2, 1.0])
 
     with map_col:
-        st.subheader(f"Map View ({selected_date}, {selected_hour:02d}:00)")
-
         center_lat = float(valid_map_df["lat"].mean()) if not valid_map_df.empty else 40.75
         center_lon = float(valid_map_df["lon"].mean()) if not valid_map_df.empty else -73.98
         zoom_level = 11.0 if selected_borough == "All Boroughs" else 12.2
 
-        layers = []
-        if map_style in ["Smooth Heatmap Wave", "Heatmap + Stations"]:
-            layers.append(
-                pdk.Layer(
-                    "HeatmapLayer",
-                    data=valid_map_df,
-                    get_position="[lon, lat]",
-                    get_weight="pred_weight",
-                    radiusPixels=48,
-                    intensity=1.35,
-                    threshold=0.04,
-                    opacity=0.80,
-                )
+        if play_wave:
+            st.subheader(f"Live 24h Demand Wave ({selected_date})")
+            render_smooth_wave_player(
+                filtered_stations=filtered_stations,
+                day_df=day_df,
+                available_hours=available_hours,
+                selected_date=selected_date,
+                selected_borough=selected_borough,
+                map_style=map_style,
+                show_bike_flows=show_bike_flows,
+                center_lat=center_lat,
+                center_lon=center_lon,
+                zoom_level=zoom_level,
             )
-
-        if map_style in ["Station Points", "Heatmap + Stations"]:
-            layers.append(
-                pdk.Layer(
-                    "ScatterplotLayer",
-                    data=valid_map_df,
-                    get_position="[lon, lat]",
-                    get_fill_color="color",
-                    get_radius=45 if map_style == "Heatmap + Stations" else 55,
-                    radius_min_pixels=2 if map_style == "Heatmap + Stations" else 3,
-                    radius_max_pixels=10 if map_style == "Heatmap + Stations" else 12,
-                    pickable=True,
-                )
-            )
-
-        if show_bike_flows:
-            substep = st.session_state.get("wave_substep", 1) % len(WAVE_PROGRESS_STEPS)
-            progress_t = WAVE_PROGRESS_STEPS[substep]
-            flows_df = build_bike_flows(valid_map_df, prev_hour_df, progress_t=progress_t)
-            if not flows_df.empty:
+        else:
+            st.subheader(f"Map View ({selected_date}, {selected_hour:02d}:00)")
+            layers = []
+            if map_style in ["Smooth Heatmap Wave", "Heatmap + Stations"]:
                 layers.append(
                     pdk.Layer(
-                        "ArcLayer",
-                        data=flows_df,
-                        get_source_position="[lon_a, lat_a]",
-                        get_target_position="[lon_b, lat_b]",
-                        get_source_color=[56, 189, 248, 175],
-                        get_target_color=[249, 115, 22, 225],
-                        get_width="arc_width",
-                        great_circle=False,
+                        "HeatmapLayer",
+                        data=valid_map_df,
+                        get_position="[lon, lat]",
+                        get_weight="pred_weight",
+                        radiusPixels=48,
+                        intensity=1.35,
+                        threshold=0.04,
+                        opacity=0.80,
                     )
                 )
+
+            if map_style in ["Station Points", "Heatmap + Stations"]:
                 layers.append(
                     pdk.Layer(
                         "ScatterplotLayer",
-                        data=flows_df,
-                        get_position="[lon_bike, lat_bike]",
-                        get_fill_color=[255, 255, 255, 235],
-                        get_line_color=[234, 88, 12, 255],
-                        stroked=True,
-                        line_width_min_pixels=2,
-                        get_radius=85,
-                        radius_min_pixels=8,
-                        radius_max_pixels=12,
-                    )
-                )
-                layers.append(
-                    pdk.Layer(
-                        "TextLayer",
-                        data=flows_df,
-                        get_position="[lon_bike, lat_bike]",
-                        get_text="icon",
-                        character_set=["🚲"],
-                        get_size=20,
-                        get_color=[255, 255, 255, 255],
-                        get_text_anchor="'middle'",
-                        get_alignment_baseline="'center'",
+                        data=valid_map_df,
+                        get_position="[lon, lat]",
+                        get_fill_color="color",
+                        get_radius=45 if map_style == "Heatmap + Stations" else 55,
+                        radius_min_pixels=2 if map_style == "Heatmap + Stations" else 3,
+                        radius_max_pixels=10 if map_style == "Heatmap + Stations" else 12,
+                        pickable=True,
                     )
                 )
 
-        view_state = pdk.ViewState(
-            latitude=center_lat,
-            longitude=center_lon,
-            zoom=zoom_level,
-            pitch=28 if show_bike_flows else 0,
-        )
+            if show_bike_flows:
+                flows_df = build_bike_flows(valid_map_df, prev_hour_df, progress_t=0.55)
+                if not flows_df.empty:
+                    layers.append(
+                        pdk.Layer(
+                            "ArcLayer",
+                            data=flows_df,
+                            get_source_position="[lon_a, lat_a]",
+                            get_target_position="[lon_b, lat_b]",
+                            get_source_color=[56, 189, 248, 175],
+                            get_target_color=[249, 115, 22, 225],
+                            get_width="arc_width",
+                            great_circle=False,
+                        )
+                    )
+                    layers.append(
+                        pdk.Layer(
+                            "IconLayer",
+                            data=flows_df,
+                            get_position="[lon_bike, lat_bike]",
+                            get_icon="icon_data",
+                            get_size=28,
+                            size_units="'pixels'",
+                            pickable=True,
+                        )
+                    )
 
-        tooltip = (
-            {
-                "html": (
-                    "<b>{station_name}</b><br/>"
-                    "<span style='color:#cbd5e1;'>{borough} · ID: {station_id}</span><br/>"
-                    "Forecast: <b>{pred_label}</b> / h<br/>"
-                    "Actual: <b>{actual_label}</b> (Error: {diff_label})"
-                ),
-                "style": {"backgroundColor": "#1e293b", "color": "white", "fontSize": "12px"},
-            }
-            if map_style != "Smooth Heatmap Wave"
-            else None
-        )
+            view_state = pdk.ViewState(
+                latitude=center_lat,
+                longitude=center_lon,
+                zoom=zoom_level,
+                pitch=28 if show_bike_flows else 0,
+            )
 
-        st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=view_state, tooltip=tooltip))
+            tooltip = (
+                {
+                    "html": (
+                        "<b>{station_name}</b><br/>"
+                        "<span style='color:#cbd5e1;'>{borough} · ID: {station_id}</span><br/>"
+                        "Forecast: <b>{pred_label}</b> / h<br/>"
+                        "Actual: <b>{actual_label}</b> (Error: {diff_label})"
+                    ),
+                    "style": {"backgroundColor": "#1e293b", "color": "white", "fontSize": "12px"},
+                }
+                if map_style != "Smooth Heatmap Wave"
+                else None
+            )
+
+            st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=view_state, tooltip=tooltip))
+
         render_legend(map_style, show_bike_flows)
 
     with top_col:
@@ -986,30 +1259,6 @@ def main() -> None:
         selected_date=selected_date,
         selected_borough=selected_borough,
     )
-
-    if play_wave and hasattr(st, "fragment"):
-        @st.fragment(run_every=0.85)
-        def _advance_wave() -> None:
-            if st.session_state.get("wave_ready", False):
-                st.session_state["wave_ready"] = False
-                if show_bike_flows:
-                    next_sub = st.session_state.get("wave_substep", 0) + 1
-                    if next_sub < len(WAVE_PROGRESS_STEPS):
-                        st.session_state["wave_substep"] = next_sub
-                        st.rerun()
-                    else:
-                        st.session_state["wave_substep"] = 0
-                        curr_idx = available_hours.index(st.session_state["selected_hour"])
-                        st.session_state["selected_hour"] = available_hours[(curr_idx + 1) % len(available_hours)]
-                        st.rerun()
-                else:
-                    curr_idx = available_hours.index(st.session_state["selected_hour"])
-                    st.session_state["selected_hour"] = available_hours[(curr_idx + 1) % len(available_hours)]
-                    st.rerun()
-            else:
-                st.session_state["wave_ready"] = True
-
-        _advance_wave()
 
 
 if __name__ == "__main__":
