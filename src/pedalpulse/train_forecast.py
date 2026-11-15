@@ -1,3 +1,4 @@
+cat << 'EOF' > src/pedalpulse/train_forecast.py
 import argparse
 import gc
 import json
@@ -68,6 +69,7 @@ def load_lookup_arrays() -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], 
     cal["hour_utc"] = pd.to_datetime(cal["hour_utc"], utc=True)
     cal["origin_utc"] = pd.to_datetime(cal["origin_utc"], utc=True)
     cal["hour_idx"] = ((cal["hour_utc"] - EPOCH_UTC).dt.total_seconds() // 3600).astype(np.int32)
+    cal["origin_hour_idx"] = ((cal["origin_utc"] - EPOCH_UTC).dt.total_seconds() // 3600).astype(np.int32)
 
     weather = pd.read_parquet(weather_path)[
         [
@@ -98,13 +100,22 @@ def load_lookup_arrays() -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], 
         "precipitation": np.full(N_HOURS_GRID, np.nan, dtype=np.float32),
         "wind_speed_10m": np.full(N_HOURS_GRID, np.nan, dtype=np.float32),
         "cloud_cover": np.full(N_HOURS_GRID, np.nan, dtype=np.float32),
-        "origin_ns": np.zeros(N_HOURS_GRID, dtype=np.int64),
+        "origin_hour_idx": np.zeros(N_HOURS_GRID, dtype=np.int32),
     }
 
     h_idx = cw["hour_idx"].to_numpy()
-    for col in ["weekday", "month", "is_weekend", "is_holiday", "temperature_2m", "precipitation", "wind_speed_10m", "cloud_cover"]:
+    for col in [
+        "weekday",
+        "month",
+        "is_weekend",
+        "is_holiday",
+        "temperature_2m",
+        "precipitation",
+        "wind_speed_10m",
+        "cloud_cover",
+    ]:
         hour_lookup[col][h_idx] = cw[col].to_numpy(dtype=np.float32)
-    hour_lookup["origin_ns"][h_idx] = cw["origin_utc"].astype("int64").to_numpy()
+    hour_lookup["origin_hour_idx"][h_idx] = cw["origin_hour_idx"].to_numpy(dtype=np.int32)
 
     stations = pd.read_parquet(stations_path)[
         ["station_id", "lat", "lng", "borough", "first_seen_hour_utc"]
@@ -153,7 +164,6 @@ def stream_parquet_into_grids(
         df = batch.to_pandas()
         d_idx = (pd.to_datetime(df["date_local"]) - EPOCH_DATE).dt.days.to_numpy(dtype=np.int16)
 
-        # Nur Zeilen ab dem relevanten Zeitraum verarbeiten
         date_mask = d_idx >= min_day_idx
         if not date_mask.any():
             continue
@@ -178,10 +188,7 @@ def stream_parquet_into_grids(
 
         if keep_rows:
             obs_arr = (df["status"] == "observed").to_numpy()
-            if only_observed:
-                keep_mask = obs_arr
-            else:
-                keep_mask = np.ones(len(df), dtype=bool)
+            keep_mask = obs_arr if only_observed else np.ones(len(df), dtype=bool)
 
             if keep_mask.any():
                 h_utc = pd.to_datetime(df["hour_utc"], utc=True)
@@ -225,7 +232,6 @@ def build_feature_matrix(
     X[:, 7] = station_lookup["borough_code"][s]
     X[:, 8] = np.maximum(0.0, (h_idx.astype(np.float32) - station_lookup["first_seen_hour_idx"][s]) / 24.0)
 
-    # Lags über (station_idx, day_idx - k, hour_local) -> 100 % DST-konform zu data_contract.md
     X[:, 9] = pickups_grid[s, np.maximum(0, d - 1), hl]
     X[:, 10] = pickups_grid[s, np.maximum(0, d - 2), hl]
     X[:, 11] = pickups_grid[s, np.maximum(0, d - 7), hl]
@@ -275,7 +281,6 @@ def main() -> None:
         data_mode = "holdout_from_quick_dev"
         model_version = "hist_gbdt_quick_v1"
     else:
-        # Ab 2024-09-15 einlesen (12 Monate Saisonzyklus + 14 Tage Lag-Vorlauf)
         min_dev_day = int((pd.Timestamp("2024-09-15") - EPOCH_DATE).days)
         print("Lade dev-Trainingsdaten (ab 2024-09-15) speichersparend in Batches...")
         dev_rows = stream_parquet_into_grids(
@@ -293,13 +298,11 @@ def main() -> None:
     assert dev_rows is not None
     daily_pickups = np.nansum(pickups_grid, axis=2).astype(np.float32)
 
-    # Nur Zeilen behalten, die mindestens 14 Tage Historie für die Lags haben
     min_train_day = int(dev_rows["day_idx"].min()) + 14
     valid_train = dev_rows["day_idx"] >= min_train_day
     for k in dev_rows:
         dev_rows[k] = dev_rows[k][valid_train]
 
-    # Falls > 5 Mio. Trainingszeilen, gleichmäßig auf 5 Mio. begrenzen (schont RAM, gleiche Güte)
     max_train_rows = 5_000_000
     if len(dev_rows["station_idx"]) > max_train_rows:
         rng = np.random.default_rng(42)
@@ -345,7 +348,6 @@ def main() -> None:
     preds = np.empty(n_holdout, dtype=np.float32)
     baseline = np.empty(n_holdout, dtype=np.float32)
 
-    # Vorhersagen in 1-Mio.-Blöcken berechnen, damit RAM niedrig bleibt
     chunk_size = 1_000_000
     for start in range(0, n_holdout, chunk_size):
         end = min(start + chunk_size, n_holdout)
@@ -354,7 +356,6 @@ def main() -> None:
             sub_rows, pickups_grid, dropoffs_grid, daily_pickups, hour_lookup, station_lookup
         )
         preds[start:end] = np.clip(model.predict(X_chunk), 0.0, None)
-        # Baseline: lag_7d_pickups (Spalte 11), Fallback lag_1d_pickups (Spalte 9), sonst 0
         b_chunk = np.where(np.isnan(X_chunk[:, 11]), X_chunk[:, 9], X_chunk[:, 11])
         baseline[start:end] = np.clip(np.nan_to_num(b_chunk, nan=0.0), 0.0, None)
         del X_chunk
@@ -400,7 +401,6 @@ def main() -> None:
     }
     (REPORTS_DIR / "holdout_metrics.json").write_text(json.dumps(metrics_payload, indent=2))
 
-    # Letzte N Tage des Holdouts für das Dashboard kompakt exportieren
     max_day = int(holdout_rows["day_idx"].max())
     export_start_day = max_day - (args.export_days - 1)
     exp_mask = holdout_rows["day_idx"] >= export_start_day
@@ -410,7 +410,7 @@ def main() -> None:
     exp_h_idx = holdout_rows["hour_idx"][exp_mask]
 
     target_utc = EPOCH_UTC + pd.to_timedelta(exp_h_idx, unit="h")
-    origin_utc = pd.to_datetime(hour_lookup["origin_ns"][exp_h_idx], utc=True)
+    origin_utc = EPOCH_UTC + pd.to_timedelta(hour_lookup["origin_hour_idx"][exp_h_idx], unit="h")
 
     preds_out = pd.DataFrame(
         {
@@ -432,3 +432,26 @@ def main() -> None:
     actuals_out = pd.DataFrame(
         {
             "station_id": exp_station_ids,
+            "target_start_utc": target_utc,
+            "pickups": exp_pickups,
+            "status": exp_status,
+        }
+    )
+
+    preds_path = PROCESSED_DIR / "predictions.parquet"
+    actuals_path = PROCESSED_DIR / "actuals.parquet"
+    preds_out.to_parquet(preds_path, index=False)
+    actuals_out.to_parquet(actuals_path, index=False)
+
+    start_date_str = (EPOCH_DATE + pd.Timedelta(days=export_start_day)).date()
+    end_date_str = (EPOCH_DATE + pd.Timedelta(days=max_day)).date()
+    print(
+        f"\nGespeichert ({start_date_str} bis {end_date_str}): "
+        f"{len(preds_out):,} Prognosezeilen -> {preds_path}"
+    )
+
+
+if __name__ == "__main__":
+    main()
+EOF
+python src/pedalpulse/train_forecast.py
