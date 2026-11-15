@@ -1,4 +1,3 @@
-cat << 'EOF' > src/pedalpulse/train_forecast.py
 import argparse
 import gc
 import json
@@ -453,5 +452,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-EOF
-python src/pedalpulse/train_forecast.py

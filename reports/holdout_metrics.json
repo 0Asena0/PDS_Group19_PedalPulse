@@ -1,0 +1,37 @@
+{
+  "model_version": "hist_gbdt_v1",
+  "data_mode": "holdout_backtest",
+  "features": [
+    "hour_local",
+    "weekday",
+    "month",
+    "is_weekend",
+    "is_holiday",
+    "lat",
+    "lng",
+    "borough_code",
+    "station_age_days",
+    "lag_1d_pickups",
+    "lag_2d_pickups",
+    "lag_7d_pickups",
+    "lag_14d_pickups",
+    "lag_1d_dropoffs",
+    "prev_day_station_pickups",
+    "temperature_2m",
+    "precipitation",
+    "wind_speed_10m",
+    "cloud_cover"
+  ],
+  "baseline_weekly_lag": {
+    "rows_observed": 8645747,
+    "mae": 1.3017171332910853,
+    "rmse": 2.8164321510075383,
+    "bias": 0.03375127678383372
+  },
+  "model": {
+    "rows_observed": 8645747,
+    "mae": 0.9907762947478641,
+    "rmse": 2.0106367251363064,
+    "bias": -0.10741760609910418
+  }
+}

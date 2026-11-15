@@ -21,8 +21,8 @@ RELEASE_BASE_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/downlo
 COHORT_PATH = Path("data/cohort.csv")
 MANIFEST_PATH = Path("data/manifest.csv")
 PROCESSED_DIR = Path("data/processed")
-PREDS_PATH = PROCESSED_DIR / "dummy_predictions.parquet"
-ACTUALS_PATH = PROCESSED_DIR / "dummy_actuals.parquet"
+PREDS_PATH = PROCESSED_DIR / "predictions.parquet" if (PROCESSED_DIR / "predictions.parquet").exists() else PROCESSED_DIR / "dummy_predictions.parquet"
+ACTUALS_PATH = PROCESSED_DIR / "actuals.parquet" if (PROCESSED_DIR / "actuals.parquet").exists() else PROCESSED_DIR / "dummy_actuals.parquet"
 LOCAL_TZ = "America/New_York"
 
 
