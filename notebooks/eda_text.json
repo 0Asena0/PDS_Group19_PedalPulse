@@ -1,0 +1,46 @@
+{
+  "daily_trips": {
+    "title": "1. Daily trips and trend",
+    "text": "The system had 35.1 million cleaned trips in 2023 and 44.3 million in 2024. The mean day from June to August rose from 120,000 trips in 2023 to 153,000 in 2024; June 2025, the last month in the EDA window, averaged 159,000. Most of the growth happened between 2023 and 2024. The lowest day, 2023-04-29 with 17,757 trips, had 28.8 mm of rain (ERA5); the figure covers all stations, not only the cohort."
+  },
+  "coverage": {
+    "title": "2. Coverage, zeros and inactive hours",
+    "text": "The number of cohort stations in the grid grows from 1,607 in January 2023 to all 2,072 from December 2024, because each station enters the grid with its first trip. Of the observed station-hours, 49.0 % have zero pickups, about 56 % in winter months and 41 % in summer months. Inactive hours are 1.2 % of the EDA window and peak at 2.7 % in September 2023; the rule cannot tell a closure from a station that moved to a new ID."
+  },
+  "count_distribution": {
+    "title": "3. Distribution of hourly pickups",
+    "text": "Half of the observed station-hours have zero pickups and 17 % have exactly one. The mean is 2.26 and the variance 20.49, so the counts are strongly overdispersed compared with a Poisson distribution. The 99th percentile is 22 pickups and the maximum 191."
+  },
+  "daily_profile": {
+    "title": "4. Daily profile: working days and days off",
+    "text": "Working days have two peaks, 4.3 pickups per station-hour at 08:00 and 5.6 at 17:00. Weekends and federal holidays have no morning peak and a flat plateau from about 12:00 to 17:00 at 3.6 to 3.9. At night days off are busier, 0.36 against 0.12 at 03:00."
+  },
+  "heatmap": {
+    "title": "5. Weekday by hour",
+    "text": "The evening peak at 17:00 is highest from Tuesday to Thursday (5.6 to 6.0) and lower on Monday and Friday. The morning peak shows the same pattern, 4.7 on Tuesday and Wednesday against 3.7 on Monday and 3.5 on Friday. Holidays are not removed here, and several federal holidays fall on Mondays."
+  },
+  "station_map": {
+    "title": "6. Stations by volume",
+    "text": "Demand is concentrated in Midtown and Lower Manhattan; all five busiest stations are in Manhattan, led by W 21 St & 6 Ave with 415 pickups per day. The median cohort station has 24.8 pickups per day and the mean is 52.9, so a few large stations carry much of the volume. Values are averages over each station's observed days in the EDA window."
+  },
+  "boroughs": {
+    "title": "7. Boroughs",
+    "text": "Manhattan has 651 of the 2,072 cohort stations (31 %) but 64 % of the pickups, Brooklyn has 679 stations and 26 %, Queens 432 and 6.5 %, the Bronx 310 and 3.2 %. The median Manhattan station has 100.6 pickups per day, the median Bronx station 9.4. No station in the data lies on Staten Island."
+  },
+  "demand_classes": {
+    "title": "8. Stations by demand class",
+    "text": "Splitting the cohort into thirds by pickups per day gives a low class up to 13.9 pickups per day and a high class from 53.2. In the low class the median station has zero pickups in 78 % of its observed hours, in the high class in 23 %. The share of zero hours thus differs by a factor of more than three between the classes."
+  },
+  "weather": {
+    "title": "9. Temperature and precipitation (observed weather, descriptive)",
+    "text": "Daily trips and daily mean temperature correlate at 0.74; the median day has 58,000 trips at or below 0 degrees C and 164,000 above 30 degrees C. Days with more than 5 mm of rain have a median of 77,000 trips against 116,000 on dry days. Temperature and season move together, so these figures do not separate the two effects, and the weather is observed ERA5 data that a day-ahead forecast would not have."
+  },
+  "holidays": {
+    "title": "10. Holidays",
+    "text": "On federal holidays the median day has 70,900 trips, against 115,000 on working days and 100,000 on weekends; relative to the median working day of the same month the median federal holiday reaches 0.78. Thanksgiving 2024 (0.20) and Christmas 2024 (0.24) are the lowest. Holidays that only New York State observes, such as Lincoln's Birthday and Election Day, are at 1.09 and behave like working days, which matters because `is_holiday` includes them."
+  },
+  "ebike_member": {
+    "title": "11. E-bike and member share",
+    "text": "The e-bike share rose from 50 % of trips in January 2023 to 66 % in July 2024 and 71 % in June 2025. Members make up 87 to 91 % of trips in January and 77 to 80 % in summer, when more casual riders use the system. Both shares are computed over all stations."
+  }
+}
