@@ -1,4 +1,4 @@
-"""History features for day-ahead forecasts, built the same way for backtests and the app.
+"""Features for day-ahead forecasts, built the same way for backtests and the app.
 
 Every history feature points to a source: a local day before the target day, and for hourly lags a local hour.
 A value is used only if the source is complete at the forecast origin:
@@ -22,6 +22,8 @@ import pandas as pd
 
 HOUR_LAG_DAYS = (1, 2, 7, 14, 21, 28)
 CALENDAR_FEATURES = ["hour_local", "weekday", "month", "is_weekend", "is_holiday", "is_dst_change_day"]
+WEATHER_FEATURES = ["temperature_2m", "precipitation", "wind_speed_10m", "cloud_cover"]
+STATION_FEATURES = ["station_id", "lat", "lng", "borough"]
 HISTORY_FEATURES = [f"lag_{k}d" for k in HOUR_LAG_DAYS] + [
     "mean_same_hour_7d",
     "mean_same_weekday_hour_4w",
@@ -91,3 +93,21 @@ def add_history_features(df: pd.DataFrame, *, origin_shift_h: int = 0, latency_h
         merged.index = out.index
         out[f"day_total_{k}d"] = merged["pickups"].where(merged["source_end"] <= cutoff)
     return out
+
+
+def add_station_features(df: pd.DataFrame, stations: pd.DataFrame) -> pd.DataFrame:
+    """Coordinates and borough. Only columns the data contract allows as inputs."""
+    # I leave out pickups_total and last_seen_utc on purpose: they are computed over the whole period
+    # and would tell the model something about the future.
+    cols = stations[["station_id", "lat", "lng", "borough"]]
+    out = df.merge(cols, on="station_id", how="left", validate="many_to_one")
+    out.index = df.index
+    return out
+
+
+def build_features(
+    df: pd.DataFrame, stations: pd.DataFrame, *, origin_shift_h: int = 0, latency_h: int = 0
+) -> pd.DataFrame:
+    """All features for station-hours loaded with calendar and forecast weather."""
+    out = add_history_features(df, origin_shift_h=origin_shift_h, latency_h=latency_h)
+    return add_station_features(out, stations)

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pedalpulse.features import HISTORY_FEATURES, add_history_features
+from pedalpulse.features import HISTORY_FEATURES, add_history_features, build_features
 
 TZ = "America/New_York"
 
@@ -94,3 +94,13 @@ def test_roadmap_origin_drops_late_hours():
     assert day.loc[[22, 23], "lag_1d"].isna().all()
     assert day["day_total_1d"].isna().all()
     assert day["lag_2d"].notna().all()
+
+
+def test_station_features_keep_rows():
+    # I check that adding station data does not duplicate rows and that every row gets its borough.
+    df = station_hours()
+    stations = pd.DataFrame({"station_id": ["1.01"], "lat": [40.7], "lng": [-74.0], "borough": ["Manhattan"],
+                             "is_cohort": [True]})
+    out = build_features(df, stations)
+    assert len(out) == len(df) and (out["borough"] == "Manhattan").all()
+    assert "is_cohort" not in out.columns
