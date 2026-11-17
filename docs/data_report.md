@@ -57,7 +57,7 @@ Sum check: for each of the 39 months, raw rows equal kept rows plus the dropped 
 | `station_hours_holdout` | 9,050,496 | 2,072 | 2025-10-01 04:00 | 2026-04-01 03:00 | 8.8 MB |
 | `dev_sample_manhattan_2024_summer` | 1,432,053 | 651 | 2024-06-01 | 2024-08-31 (local) | 2.0 MB |
 
-- Inactive hours: 1.36 % of the dev rows and 4.47 % of the holdout rows. 1,063 cohort stations have at least one inactive run; together these runs cover 43,623 station-days. Runs end at the split date. Against `data-v1` this changes 24 dev rows (station `7935.07`, 2025-09-30) and 48 holdout rows (station `4354.05`, 1 to 2 October 2025) from `inactive` to `observed`.
+- Inactive hours: 1.36 % of the dev rows and 4.47 % of the holdout rows. 1,063 cohort stations have at least one inactive run; together these runs cover 43,620 station-days. Runs end at the split date. Against `data-v1` this changes 24 dev rows (station `7935.07`, 2025-09-30) and 48 holdout rows (station `4354.05`, 1 to 2 October 2025) from `inactive` to `observed`.
 - In the holdout the inactive share rises from 3.6 % in October 2025 to 6.3 % in February 2026. 41 cohort stations are inactive for the whole of March 2026 and may have closed; this cannot be checked from the trip files.
 - Share of observed hours with zero pickups: 48.2 % in dev and 55.7 % in holdout, which covers only autumn and winter months.
 - Pickups per observed station-hour in dev: median 1, 99th percentile 22, maximum 216.
