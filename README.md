@@ -11,7 +11,7 @@ uv sync
 gh release download data-v2 --dir data/release
 ```
 
-Without `gh`, download the files from the release `data-v2` in the browser and put them into `data/release/`. Without uv, use `pip install -r requirements.txt` and then `pip install -e .` in a Python 3.12 environment. Check the files with `uv run python -m pedalpulse verify` (works on Windows too).
+Without `gh`, download the files from the release `data-v2` in the browser and put them into `data/release/`. Without uv, use `pip install -r requirements.txt` and then `pip install -e .` in a Python 3.12 environment. Check the files with `uv run python -m pedalpulse verify` (works on Windows too). `station_hours_holdout.parquet` can stay on the server until the final evaluation; `verify` and the tests skip files that are not downloaded.
 
 Load the laptop file:
 
