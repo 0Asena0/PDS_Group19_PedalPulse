@@ -218,3 +218,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# PedalPulse data: never commit data files; only the manifest and the frozen cohort are tracked
+data/*
+!data/manifest.csv
+!data/cohort.csv
+*.parquet
+*.zip
+*.part
+*.csv
+!data/manifest.csv
+!data/cohort.csv

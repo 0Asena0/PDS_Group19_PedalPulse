@@ -1,0 +1,344 @@
+{
+  "data_version": "data-v2",
+  "trips": {
+    "months": 39,
+    "by_year": {
+      "2023": {
+        "raw_rows": 35106986,
+        "kept_rows": 35088513,
+        "duplicate_ride_id": 0,
+        "missing_start_station": 18198,
+        "unparsable_time": 0,
+        "time_out_of_range": 0,
+        "end_before_start": 0,
+        "start_outside_study_period": 275,
+        "kept_missing_end_station": 86845,
+        "kept_duration_under_1min": 1,
+        "kept_duration_over_24h": 26641,
+        "kept_start_ambiguous_hour": 2910,
+        "kept_start_nonexistent_hour": 0,
+        "kept_station_id_normalised": 1246293
+      },
+      "2024": {
+        "raw_rows": 44303209,
+        "kept_rows": 44273374,
+        "duplicate_ride_id": 0,
+        "missing_start_station": 29835,
+        "unparsable_time": 0,
+        "time_out_of_range": 0,
+        "end_before_start": 0,
+        "start_outside_study_period": 0,
+        "kept_missing_end_station": 107795,
+        "kept_duration_under_1min": 0,
+        "kept_duration_over_24h": 10966,
+        "kept_start_ambiguous_hour": 3531,
+        "kept_start_nonexistent_hour": 0,
+        "kept_station_id_normalised": 944777
+      },
+      "2025": {
+        "raw_rows": 45771102,
+        "kept_rows": 45750831,
+        "duplicate_ride_id": 0,
+        "missing_start_station": 20271,
+        "unparsable_time": 0,
+        "time_out_of_range": 0,
+        "end_before_start": 0,
+        "start_outside_study_period": 0,
+        "kept_missing_end_station": 127077,
+        "kept_duration_under_1min": 1,
+        "kept_duration_over_24h": 9093,
+        "kept_start_ambiguous_hour": 4123,
+        "kept_start_nonexistent_hour": 0,
+        "kept_station_id_normalised": 803861
+      },
+      "2026": {
+        "raw_rows": 5981588,
+        "kept_rows": 5977495,
+        "duplicate_ride_id": 0,
+        "missing_start_station": 4093,
+        "unparsable_time": 0,
+        "time_out_of_range": 0,
+        "end_before_start": 0,
+        "start_outside_study_period": 0,
+        "kept_missing_end_station": 25316,
+        "kept_duration_under_1min": 3,
+        "kept_duration_over_24h": 1956,
+        "kept_start_ambiguous_hour": 0,
+        "kept_start_nonexistent_hour": 0,
+        "kept_station_id_normalised": 83034
+      }
+    },
+    "total": {
+      "raw_rows": 131162885,
+      "kept_rows": 131090213,
+      "duplicate_ride_id": 0,
+      "missing_start_station": 72397,
+      "unparsable_time": 0,
+      "time_out_of_range": 0,
+      "end_before_start": 0,
+      "start_outside_study_period": 275,
+      "kept_missing_end_station": 347033,
+      "kept_duration_under_1min": 5,
+      "kept_duration_over_24h": 48656,
+      "kept_start_ambiguous_hour": 10564,
+      "kept_start_nonexistent_hour": 0,
+      "kept_station_id_normalised": 3077965
+    },
+    "duration_sensitivity": {
+      "outside_1min_24h": 48661,
+      "share_outside": 0.00037
+    }
+  },
+  "stations": {
+    "station_ids_total": 2478,
+    "non_public_ids": [
+      [
+        "190 Morgan",
+        "190 Morgan"
+      ],
+      [
+        "LA Metro Demo 1",
+        "LA Metro Demo 1"
+      ],
+      [
+        "LA Metro Demo 2",
+        "LA Metro Demo 2"
+      ],
+      [
+        "LA Metro Demo 3",
+        "LA Metro Demo 3"
+      ],
+      [
+        "Lab - NYC",
+        "Lab - NYC"
+      ],
+      [
+        "Lab - NYC - Monolith",
+        "Lab - NYC - M"
+      ],
+      [
+        "SYS016",
+        "Morgan Bike Mechanics"
+      ],
+      [
+        "SYS018",
+        "Bronx WH station"
+      ],
+      [
+        "SYS025",
+        "Bike Mechanics at Riis Room A"
+      ],
+      [
+        "SYS028",
+        "Apache"
+      ],
+      [
+        "SYS032",
+        "Park Ave Depot"
+      ],
+      [
+        "SYS033",
+        "Pier 40 X2"
+      ],
+      [
+        "SYS035",
+        "Pier 40 Dock Station"
+      ],
+      [
+        "SYS038",
+        "Morgan Loading Docks"
+      ],
+      [
+        "SYS039",
+        "Morgan Warehouse Monolith"
+      ],
+      [
+        "Shop Morgan",
+        "Shop Morgan"
+      ]
+    ],
+    "cohort_size_by_threshold": {
+      "50%": 2122,
+      "80%": 2072,
+      "95%": 2004
+    },
+    "cohort_size": 2072,
+    "cohort_excluded_non_public": [
+      [
+        "Lab - NYC",
+        "Lab - NYC"
+      ],
+      [
+        "Lab - NYC - Monolith",
+        "Lab - NYC - M"
+      ],
+      [
+        "SYS016",
+        "Morgan Bike Mechanics"
+      ],
+      [
+        "SYS033",
+        "Pier 40 X2"
+      ],
+      [
+        "SYS038",
+        "Morgan Loading Docks"
+      ],
+      [
+        "Shop Morgan",
+        "Shop Morgan"
+      ]
+    ],
+    "cohort_by_borough": {
+      "Brooklyn": 679,
+      "Manhattan": 651,
+      "Queens": 432,
+      "Bronx": 310
+    },
+    "cohort_coord_source": {
+      "classic_starts_to_cutoff": 2072
+    },
+    "borough_method_all": {
+      "inside": 2383,
+      "outside": 94,
+      "nearest_within_500m": 1
+    },
+    "ids_with_several_names": 75,
+    "names_with_several_ids": 37,
+    "cohort_first_seen_after_january_2023": 465
+  },
+  "grid": {
+    "dev": {
+      "rows": 47122121,
+      "stations": 2072,
+      "first_hour_utc": "2023-01-01 05:00:00",
+      "last_hour_utc": "2025-10-01 03:00:00",
+      "inactive_share": 0.01363,
+      "zero_share_observed": 0.4814,
+      "pickups": 109762835,
+      "dropoffs": 109462446,
+      "pickups_median_observed": 1.0,
+      "pickups_p99_observed": 22.0,
+      "pickups_max": 216,
+      "file_mb": 167.5
+    },
+    "holdout": {
+      "rows": 9050496,
+      "stations": 2072,
+      "first_hour_utc": "2025-10-01 04:00:00",
+      "last_hour_utc": "2026-04-01 03:00:00",
+      "inactive_share": 0.04472,
+      "zero_share_observed": 0.5573,
+      "pickups": 15241442,
+      "dropoffs": 15189859,
+      "pickups_median_observed": 0.0,
+      "pickups_p99_observed": 19.0,
+      "pickups_max": 175,
+      "file_mb": 8.8
+    },
+    "dev_sample": {
+      "rows": 1432053,
+      "stations": 651,
+      "file_mb": 2.0
+    },
+    "inactive_runs": {
+      "stations_with_inactive_days": 1063,
+      "inactive_station_days": 43620
+    }
+  },
+  "weather": {
+    "model_coverage": {
+      "gfs_seamless|2022": {
+        "temperature_2m": 1.0,
+        "precipitation": 0.0,
+        "wind_speed_10m": 0.0,
+        "cloud_cover": 0.0
+      },
+      "gfs_seamless|2023": {
+        "temperature_2m": 0.9939,
+        "precipitation": 0.0,
+        "wind_speed_10m": 0.0,
+        "cloud_cover": 0.0
+      },
+      "gfs_seamless|2024": {
+        "temperature_2m": 0.9473,
+        "precipitation": 0.9473,
+        "wind_speed_10m": 0.9473,
+        "cloud_cover": 0.9473
+      },
+      "gfs_seamless|2025": {
+        "temperature_2m": 1.0,
+        "precipitation": 1.0,
+        "wind_speed_10m": 1.0,
+        "cloud_cover": 1.0
+      },
+      "gfs_seamless|2026": {
+        "temperature_2m": 1.0,
+        "precipitation": 1.0,
+        "wind_speed_10m": 1.0,
+        "cloud_cover": 1.0
+      },
+      "jma_gsm|2022": {
+        "temperature_2m": 1.0,
+        "precipitation": 1.0,
+        "wind_speed_10m": 1.0,
+        "cloud_cover": 1.0
+      },
+      "jma_gsm|2023": {
+        "temperature_2m": 1.0,
+        "precipitation": 1.0,
+        "wind_speed_10m": 1.0,
+        "cloud_cover": 1.0
+      },
+      "jma_gsm|2024": {
+        "temperature_2m": 1.0,
+        "precipitation": 1.0,
+        "wind_speed_10m": 1.0,
+        "cloud_cover": 1.0
+      },
+      "jma_gsm|2025": {
+        "temperature_2m": 1.0,
+        "precipitation": 1.0,
+        "wind_speed_10m": 1.0,
+        "cloud_cover": 1.0
+      },
+      "jma_gsm|2026": {
+        "temperature_2m": 1.0,
+        "precipitation": 1.0,
+        "wind_speed_10m": 1.0,
+        "cloud_cover": 1.0
+      }
+    },
+    "chosen_model_hours_by_year": {
+      "2023": {
+        "gfs_seamless": 0,
+        "jma_gsm": 8760
+      },
+      "2024": {
+        "gfs_seamless": 8321,
+        "jma_gsm": 463
+      },
+      "2025": {
+        "gfs_seamless": 8760,
+        "jma_gsm": 0
+      },
+      "2026": {
+        "gfs_seamless": 2159,
+        "jma_gsm": 0
+      }
+    },
+    "forecast_hours_missing": 0,
+    "observed_hours_missing": 0,
+    "forecast_vs_era5_mae": {
+      "temperature_2m": 1.48,
+      "precipitation": 0.15,
+      "wind_speed_10m": 3.88,
+      "cloud_cover": 22.87
+    }
+  },
+  "edges": {
+    "trips_2023_01_file_starting_2022": 275,
+    "cohort_dropoffs_first_hour_2023": 678,
+    "cohort_dropoffs_same_hour_one_week_later": 1048
+  }
+}

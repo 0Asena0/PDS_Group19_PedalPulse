@@ -1,0 +1,36 @@
+[project]
+name = "pedalpulse"
+version = "1.0.0"
+description = "Data pipeline for day-ahead forecasting of hourly Citi Bike demand per station"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "duckdb>=1.1",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    "requests>=2.32",
+    "holidays>=0.60",
+    "shapely>=2.0",
+    "matplotlib>=3.9",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ipykernel>=6.29",
+    "jupyter>=1.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pedalpulse"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+# duckdb 2.0 calls DataFrame.drop(inplace=True) internally when converting results
+filterwarnings = ["ignore:The inplace keyword in DataFrame.drop is deprecated:DeprecationWarning", "ignore:The inplace keyword in DataFrame.drop is deprecated"]
