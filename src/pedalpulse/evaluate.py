@@ -1,12 +1,13 @@
 """Run models over the four dev folds and save the scores.
 
-Usage: uv run python -m pedalpulse.evaluate --stations 200 --models seasonal_naive poisson@1e-4
+Usage: uv run python -m pedalpulse.evaluate --stations 200 --models seasonal_naive lightgbm
 """
 from __future__ import annotations
 
 import argparse
 import time
 
+import numpy as np
 import pandas as pd
 
 from . import config
@@ -15,10 +16,12 @@ from .dataset import load_station_hours, release_path
 from .features import build_features
 from .folds import FOLDS, split
 from .metrics import scores
+from .models import MODELS
 
-ALL_MODELS = dict(BASELINES)
+ALL_MODELS = {**BASELINES, **MODELS}
 
 RESULTS_DIR = config.REPORTS_DIR / "results"
+PREDICTIONS_DIR = config.DATA_DIR / "predictions"
 
 
 def make_model(spec: str):
@@ -45,7 +48,7 @@ def load_dev(stations: list[str] | None) -> pd.DataFrame:
     return build_features(df, station_table)
 
 
-def run(models: list[str], n_stations: int | None) -> pd.DataFrame:
+def run(models: list[str], n_stations: int | None, save_predictions: bool = False) -> pd.DataFrame:
     stations = dev_stations(n_stations)
     data = load_dev(stations)
     results = []
@@ -63,7 +66,25 @@ def run(models: list[str], n_stations: int | None) -> pd.DataFrame:
                 "stations": len(stations) if stations else "all",
             })
             print(results[-1])
+            if save_predictions:
+                _save_predictions(valid, pred, name, fold.name, n_stations)
     return pd.DataFrame(results)
+
+
+def _save_predictions(valid: pd.DataFrame, pred: np.ndarray, model: str, fold: str, n_stations: int | None) -> None:
+    # Same columns as the forecast file the app reads, so Sandra can use these files directly.
+    out = pd.DataFrame({
+        "station_id": valid["station_id"].to_numpy(),
+        "target_start_utc": valid["hour_utc"].to_numpy(),
+        "origin_utc": valid["origin_utc"].to_numpy(),
+        "target": "pickups",
+        "prediction": pred,
+        "model_version": f"{model}-v1",
+        "data_mode": "validation",
+        "fold": fold,
+    })
+    PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(PREDICTIONS_DIR / f"{model}-v1_validation_{fold}_{n_stations or 'all'}.parquet", index=False, compression="zstd")
 
 
 def main() -> None:
@@ -71,8 +92,9 @@ def main() -> None:
     parser.add_argument("--models", nargs="+", default=list(BASELINES),
                         help=f"any of {list(ALL_MODELS)}; poisson@<alpha> sets the penalty")
     parser.add_argument("--stations", type=int, default=200, help="size of the random station sample; 0 = all")
+    parser.add_argument("--save-predictions", action="store_true", help="write every forecast to data/predictions")
     args = parser.parse_args()
-    table = run(args.models, args.stations or None)
+    table = run(args.models, args.stations or None, args.save_predictions)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = RESULTS_DIR / f"{'_'.join(args.models)}_{args.stations or 'all'}.csv"
     table.to_csv(out, index=False)
