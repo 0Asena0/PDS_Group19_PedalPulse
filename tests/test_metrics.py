@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from pedalpulse.metrics import scores
+from pedalpulse.metrics import poisson_floor, scores
 
 
 def test_scores_by_hand():
@@ -20,3 +20,13 @@ def test_scores_refuse_missing_predictions():
 
 def test_wape_undefined_without_demand():
     assert np.isnan(scores([0, 0], [1, 1])["wape"])
+
+
+def test_poisson_floor_matches_simulation():
+    # I check the formulas against brute force: draw many Poisson counts and measure the error directly.
+    rng = np.random.default_rng(19)
+    for lam in (0.3, 1.0, 2.5, 7.0):
+        y = rng.poisson(lam, 400_000)
+        floor = poisson_floor(np.full(10, lam))
+        assert floor["mae_mean"] == pytest.approx(np.abs(y - lam).mean(), rel=0.01)
+        assert floor["mae_median"] == pytest.approx(np.abs(y - np.median(y)).mean(), rel=0.01)
