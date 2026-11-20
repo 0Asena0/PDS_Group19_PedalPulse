@@ -23,3 +23,19 @@ def test_chunks_give_the_same_features_as_one_pass():
     key = ["station_id", "hour_utc"]
     pd.testing.assert_frame_equal(whole.sort_values(key).reset_index(drop=True),
                                   chunked.sort_values(key).reset_index(drop=True), check_like=True)
+
+
+def test_load_matrix_crosses_month_borders_without_losing_rows():
+    # load_matrix reads one month at a time. Over a month border it must return exactly the rows a single
+    # query returns, and nothing twice.
+    from pedalpulse import feature_store
+
+    if not list((feature_store.FEATURE_DIR / f"dev_{config.DATA_VERSION}").glob("*.parquet")):
+        pytest.skip("feature store not built")
+    start, end = "2025-01-25", "2025-02-03"
+    x, y, dates = feature_store.load_matrix(lambda c: c[["pickups"]].to_numpy("float32"), start, end, 1)
+    direct = feature_store.load(["pickups", "date_local"], start, end, observed_only=True)
+    assert len(y) == len(direct)
+    assert y.sum() == direct["pickups"].sum()
+    assert (x[:, 0] == y).all()
+    assert dates.min() == pd.Timestamp(start) and dates.max() == pd.Timestamp(end)

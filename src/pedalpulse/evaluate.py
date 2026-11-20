@@ -15,6 +15,7 @@ from .baselines import BASELINES
 from .dataset import load_station_hours, release_path
 from .features import build_features
 from .folds import FOLDS, split
+from . import feature_store
 from .metrics import scores
 from .models import MODELS
 
@@ -87,14 +88,55 @@ def _save_predictions(valid: pd.DataFrame, pred: np.ndarray, model: str, fold: s
     out.to_parquet(PREDICTIONS_DIR / f"{model}-v1_validation_{fold}_{n_stations or 'all'}.parquet", index=False, compression="zstd")
 
 
+def run_full(folds: list[str], save_predictions: bool = False) -> pd.DataFrame:
+    """LightGBM on all cohort stations, read from the feature store.
+
+    The training block of a fold has up to 42 million rows. I never hold it as a table: it goes month by month
+    into one float32 matrix, LightGBM bins it, and then the matrix is freed. Only LightGBM, because the random
+    forest needs the raw rows during the whole fit and does not fit into memory at this size.
+    """
+    from .models import LGB_FEATURES, LightGBM, lgb_matrix
+
+    stations = pd.read_csv(release_path("cohort.csv"), dtype={"station_id": str})["station_id"].sort_values().tolist()
+    boroughs = sorted(pd.read_parquet(release_path("stations.parquet"))["borough"].dropna().unique())
+    results = []
+    for fold in [f for f in FOLDS if f.name in folds]:
+        start = time.time()
+        model = LightGBM()
+        model.boroughs, model.stations = boroughs, stations
+        x, y, dates = feature_store.load_matrix(lambda c: lgb_matrix(c, boroughs, stations),
+                                                str(fold.train_start), str(fold.train_end), len(LGB_FEATURES))
+        full = model.dataset(x, y)
+        del x  # binned now; the raw matrix is not needed any more
+        model.fit_dataset(full, dates)
+        del full
+        valid = feature_store.load(["*"], str(fold.valid_start), str(fold.valid_end), observed_only=True)
+        pred = model.predict(valid)
+        results.append({"model": "lightgbm", "fold": fold.name, **scores(valid["pickups"], pred),
+                        "seconds": round(time.time() - start, 1), "stations": "all",
+                        "train_rows": len(y), "rounds": model.rounds})
+        print(results[-1], flush=True)
+        if save_predictions:
+            _save_predictions(valid, pred, "lightgbm", fold.name, None)
+    return pd.DataFrame(results)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", nargs="+", default=list(BASELINES),
                         help=f"any of {list(ALL_MODELS)}; poisson@<alpha> sets the penalty")
     parser.add_argument("--stations", type=int, default=200, help="size of the random station sample; 0 = all")
     parser.add_argument("--save-predictions", action="store_true", help="write every forecast to data/predictions")
+    parser.add_argument("--full", action="store_true", help="all cohort stations from the feature store")
+    parser.add_argument("--folds", nargs="+", default=[f.name for f in FOLDS])
     args = parser.parse_args()
-    table = run(args.models, args.stations or None, args.save_predictions)
+    if args.full:
+        if args.models != ["lightgbm"]:
+            raise SystemExit("--full runs LightGBM only: use --models lightgbm")
+        table = run_full(args.folds, args.save_predictions)
+        args.stations = 0
+    else:
+        table = run(args.models, args.stations or None, args.save_predictions)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = RESULTS_DIR / f"{'_'.join(args.models)}_{args.stations or 'all'}.csv"
     table.to_csv(out, index=False)

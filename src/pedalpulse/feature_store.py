@@ -12,6 +12,7 @@ import argparse
 import time
 
 import duckdb
+import numpy as np
 import pandas as pd
 
 from . import config
@@ -54,6 +55,29 @@ def load(columns: list[str], start_local: str | None = None, end_local: str | No
     with duckdb.connect() as con:
         con.execute("SET enable_progress_bar = false")
         return con.execute(query).df()
+
+
+def load_matrix(to_matrix, start_local: str, end_local: str, n_columns: int, split: str = "dev"):
+    """Observed training rows as one float32 matrix, filled month by month so no full table sits in memory.
+
+    to_matrix turns a chunk of the feature table into its rows of the matrix (e.g. models.lgb_matrix).
+    Returns the matrix, the pickups and the local dates, all in the same row order.
+    """
+    n = int(load(["count(*) AS n"], start_local, end_local, split, observed_only=True)["n"].iloc[0])
+    x = np.empty((n, n_columns), dtype="float32")
+    y = np.empty(n, dtype="float32")
+    dates = np.empty(n, dtype="datetime64[D]")
+    pos = 0
+    for month in pd.period_range(start_local, end_local, freq="M"):
+        first = max(month.start_time, pd.Timestamp(start_local)).date()
+        last = min(month.end_time, pd.Timestamp(end_local)).date()
+        chunk = load(["*"], str(first), str(last), split, observed_only=True)
+        x[pos:pos + len(chunk)] = to_matrix(chunk)
+        y[pos:pos + len(chunk)] = chunk["pickups"].to_numpy("float32")
+        dates[pos:pos + len(chunk)] = pd.to_datetime(chunk["date_local"]).to_numpy("datetime64[D]")
+        pos += len(chunk)
+    assert pos == n, f"read {pos} rows, expected {n}"
+    return x, y, dates
 
 
 if __name__ == "__main__":
