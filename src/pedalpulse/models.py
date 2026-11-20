@@ -44,7 +44,9 @@ class RandomForest:
     The station is described by its coordinates, its borough and its own past demand (the lags) instead.
     """
 
-    DEFAULTS = dict(n_estimators=100, max_samples=0.1, min_samples_leaf=20, max_features=0.5)
+    # Chosen by the random search in tune.py (12 settings, 4 folds, 200 stations): this one beat the old default
+    # (max_samples 0.1, max_features 0.5) in all 4 folds, by 0.5 to 1.1 % MAE.
+    DEFAULTS = dict(n_estimators=100, max_samples=0.2, min_samples_leaf=20, max_features=0.7)
 
     def __init__(self, **params):
         self.params = {**self.DEFAULTS, **params}
@@ -52,7 +54,7 @@ class RandomForest:
     def fit(self, train: pd.DataFrame) -> "RandomForest":
         rows = observed(train)
         self.boroughs = sorted(rows["borough"].dropna().unique())
-        # max_samples=0.1: each tree sees 10 % of the rows. On millions of rows a full bootstrap per tree
+        # max_samples=0.2: each tree sees 20 % of the rows. On millions of rows a full bootstrap per tree
         # takes far too long, and the trees still differ enough to average well.
         self.model = RandomForestRegressor(n_jobs=-1, random_state=SEED, **self.params)
         self.model.fit(_matrix(rows, self.boroughs), rows["pickups"])
@@ -65,11 +67,13 @@ class RandomForest:
 class LightGBM:
     """One global gradient-boosting model for all stations, Poisson objective, station_id as a category."""
 
-    DEFAULTS = dict(objective="poisson", learning_rate=0.05, num_leaves=63, min_data_in_leaf=100,
+    # Learning rate 0.1: I first used 0.05, but on f4 it ran into the cap of 2000 trees without early stopping
+    # and was not better than 0.1 (1.3768 vs 1.3767 MAE on 200 stations). So 0.1 with a higher cap.
+    DEFAULTS = dict(objective="poisson", learning_rate=0.1, num_leaves=63, min_data_in_leaf=100,
                     feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, lambda_l2=0.0,
                     seed=SEED, verbose=-1)
 
-    def __init__(self, max_rounds: int = 2000, early_stopping_days: int = 28, refit: bool = True, **params):
+    def __init__(self, max_rounds: int = 4000, early_stopping_days: int = 28, refit: bool = True, **params):
         self.params = {**self.DEFAULTS, **params}
         self.max_rounds = max_rounds
         self.early_stopping_days = early_stopping_days
