@@ -4,6 +4,9 @@ Both get the same features and are trained on the observed hours of a fold's tra
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
@@ -109,6 +112,21 @@ class LightGBM:
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
         return self.model.predict(lgb_matrix(df, self.boroughs, self.stations), num_iteration=self.rounds)
+
+    def save(self, path: Path) -> None:
+        """The trees plus the category lists; without the lists the station codes would not match."""
+        path.mkdir(parents=True, exist_ok=True)
+        self.model.save_model(str(path / "model.txt"), num_iteration=self.rounds)
+        meta = {"rounds": self.rounds, "boroughs": self.boroughs, "stations": self.stations, "params": self.params}
+        (path / "meta.json").write_text(json.dumps(meta, indent=1, default=str))
+
+    @classmethod
+    def load(cls, path: Path) -> "LightGBM":
+        meta = json.loads((path / "meta.json").read_text())
+        model = cls(**meta["params"])
+        model.model = lgb.Booster(model_file=str(path / "model.txt"))
+        model.rounds, model.boroughs, model.stations = meta["rounds"], meta["boroughs"], meta["stations"]
+        return model
 
 
 MODELS = {"random_forest": RandomForest, "lightgbm": LightGBM}
