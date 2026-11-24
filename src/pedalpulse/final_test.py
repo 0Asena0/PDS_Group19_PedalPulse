@@ -21,11 +21,10 @@ import pandas as pd
 
 from . import config, feature_store
 from .dataset import load_station_hours, release_path
-from .evaluate import PREDICTIONS_DIR, RESULTS_DIR
+from .evaluate import MODELS_DIR, PREDICTIONS_DIR, RESULTS_DIR, fit_full
 from .features import HOUR_LAG_DAYS, build_features
 from .folds import TEST, holdout_split
 from .metrics import scores
-from .models import LGB_FEATURES, LightGBM, lgb_matrix
 
 # The longest lag is 28 days; one extra week so the rolling means at the start are complete too.
 HISTORY_DAYS = max(HOUR_LAG_DAYS) + 7
@@ -66,23 +65,16 @@ def run(unlock: bool) -> dict:
     holdout_split(pd.DataFrame({"date_local": []}), pd.DataFrame({"date_local": []}), unlock=unlock)
     start = time.time()
     build_holdout_features()
-    stations = pd.read_csv(release_path("cohort.csv"), dtype={"station_id": str})["station_id"].sort_values().tolist()
-    boroughs = sorted(pd.read_parquet(release_path("stations.parquet"))["borough"].dropna().unique())
-    model = LightGBM()
-    model.boroughs, model.stations = boroughs, stations
-    x, y, dates = feature_store.load_matrix(lambda c: lgb_matrix(c, boroughs, stations),
-                                            str(TEST.train_start), str(TEST.train_end), len(LGB_FEATURES))
-    full = model.dataset(x, y)
-    del x
-    model.fit_dataset(full, dates)
-    del full
+    model = fit_full(TEST.train_start, TEST.train_end)
+    model.save(MODELS_DIR / "lightgbm-v1_final")
     test = feature_store.load(["*"], split="holdout")
     holdout_split(pd.DataFrame({"date_local": []}), test, unlock=unlock)  # checks the dates of the test rows
     test["prediction"] = model.predict(test)
     observed = test[test["status"] == "observed"]
     result = {"model": "lightgbm", "fold": "test", **scores(observed["pickups"], observed["prediction"]),
-              "train_rows": len(y), "rounds": model.rounds, "seconds": round(time.time() - start, 1)}
+              "train_rows": model.train_rows, "rounds": model.rounds, "seconds": round(time.time() - start, 1)}
     print(result, flush=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     (RESULTS_DIR / "holdout_metrics.json").write_text(json.dumps(result, indent=2))
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({
