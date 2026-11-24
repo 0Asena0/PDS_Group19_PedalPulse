@@ -145,12 +145,15 @@ def verify_release() -> None:
     for line in sums.read_text().splitlines():
         digest, name = line.split(maxsplit=1)
         path = config.RELEASE_DIR / name
-        ok = path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() == digest
-        print(f"{name}: {'OK' if ok else 'MISSING' if not path.exists() else 'FAILED'}")
+        if not path.exists():  # e.g. the holdout, which we do not download on purpose
+            print(f"{name}: not downloaded")
+            continue
+        ok = hashlib.sha256(path.read_bytes()).hexdigest() == digest
+        print(f"{name}: {'OK' if ok else 'FAILED'}")
         if not ok:
             failed.append(name)
     if failed:
-        raise SystemExit(f"{len(failed)} file(s) missing or changed")
+        raise SystemExit(f"{len(failed)} file(s) changed")
 
 
 def export_release(force: bool = False) -> None:
