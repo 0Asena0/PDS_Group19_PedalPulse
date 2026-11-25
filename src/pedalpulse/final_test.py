@@ -9,11 +9,14 @@ Steps
 2. Training on all dev rows of all cohort stations (feature store, month by month, as in evaluate.py --full).
 3. Forecasts for every holdout station-hour (the dashboard needs inactive hours too), scores on observed
    hours only, like in the folds.
+4. The model comparison of the report, repeated on the holdout: baselines, random forest and LightGBM trained
+   on the same 200 stations as in development, plus the full model scored on these 200 stations.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import time
 from datetime import timedelta
 
@@ -21,13 +24,15 @@ import pandas as pd
 
 from . import config, feature_store
 from .dataset import load_station_hours, release_path
-from .evaluate import MODELS_DIR, PREDICTIONS_DIR, RESULTS_DIR, fit_full
+from .evaluate import MODELS_DIR, PREDICTIONS_DIR, RESULTS_DIR, dev_stations, fit_full, load_dev, make_model
 from .features import HOUR_LAG_DAYS, build_features
 from .folds import TEST, holdout_split
 from .metrics import scores
 
 # The longest lag is 28 days; one extra week so the rolling means at the start are complete too.
 HISTORY_DAYS = max(HOUR_LAG_DAYS) + 7
+# The same models as in the comparison on the dev folds (report section 5), with their frozen defaults.
+COMPARISON = ["seasonal_naive", "historical_mean", "poisson", "random_forest", "lightgbm"]
 
 
 def features_with_history(history: pd.DataFrame, later: pd.DataFrame, stations: pd.DataFrame) -> pd.DataFrame:
@@ -60,6 +65,32 @@ def build_holdout_features(chunk: int = 150) -> None:
         print(f"holdout {part.name}: {len(frame):,} rows", flush=True)
 
 
+def commit() -> str:
+    """The commit the run comes from, so every result can be traced back to its exact code."""
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def compare_200(test: pd.DataFrame, unlock: bool) -> pd.DataFrame:
+    """All models of the comparison, trained on all dev rows of the 200 dev stations, scored on their holdout hours.
+
+    `test` already has the forecast of the full model, so it is scored on exactly the same rows.
+    """
+    stations = dev_stations(200)
+    train, test = holdout_split(load_dev(stations), test[test["station_id"].isin(stations)], unlock=unlock)
+    observed = (test["status"] == "observed").to_numpy()
+    rows = [{"model": "lightgbm (all stations)", **scores(test["pickups"][observed], test["prediction"][observed])}]
+    for name in COMPARISON:
+        start = time.time()
+        pred = make_model(name).fit(train).predict(test)
+        rows.append({"model": name, **scores(test["pickups"][observed], pred[observed]),
+                     "seconds": round(time.time() - start, 1)})
+        print(rows[-1], flush=True)
+    return pd.DataFrame(rows).assign(fold="test", stations=len(stations))
+
+
 def run(unlock: bool) -> dict:
     # holdout_split is the lock: without unlock=True it stops here, before anything from the holdout is read.
     holdout_split(pd.DataFrame({"date_local": []}), pd.DataFrame({"date_local": []}), unlock=unlock)
@@ -72,7 +103,8 @@ def run(unlock: bool) -> dict:
     test["prediction"] = model.predict(test)
     observed = test[test["status"] == "observed"]
     result = {"model": "lightgbm", "fold": "test", **scores(observed["pickups"], observed["prediction"]),
-              "train_rows": model.train_rows, "rounds": model.rounds, "seconds": round(time.time() - start, 1)}
+              "train_rows": model.train_rows, "rounds": model.rounds, "seconds": round(time.time() - start, 1),
+              "commit": commit()}
     print(result, flush=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     (RESULTS_DIR / "holdout_metrics.json").write_text(json.dumps(result, indent=2))
@@ -82,6 +114,11 @@ def run(unlock: bool) -> dict:
         "target": "pickups", "prediction": test["prediction"].astype("float64"), "model_version": "lightgbm-v1",
         "data_mode": "test", "fold": "test",
     }).to_parquet(PREDICTIONS_DIR / "lightgbm-v1_test_test_all.parquet", index=False, compression="zstd")
+    # The main result is saved now; the comparison comes last, so a problem there does not cost the main run.
+    del model
+    comparison = compare_200(test, unlock)
+    comparison.to_csv(RESULTS_DIR / "holdout_comparison_200.csv", index=False)
+    print(comparison[["model", "mae", "rmse", "wape", "bias"]].round(3).to_string(index=False), flush=True)
     return result
 
 

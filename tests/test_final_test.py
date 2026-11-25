@@ -56,6 +56,10 @@ def test_final_test_runs_end_to_end_on_stand_in_data(tmp_path, monkeypatch):
         return model
 
     monkeypatch.setattr(final_test, "build_holdout_features", lambda: None)
+    # The comparison: the sample stations stand in for the 200, two fast baselines for the five models.
+    monkeypatch.setattr(final_test, "dev_stations", lambda n: sorted(stand_in["station_id"].unique()))
+    monkeypatch.setattr(final_test, "load_dev", lambda stations: features[dates < dates.max() - timedelta(days=6)])
+    monkeypatch.setattr(final_test, "COMPARISON", ["seasonal_naive", "historical_mean"])
     monkeypatch.setattr(final_test, "fit_full", small_fit)
     monkeypatch.setattr(final_test.feature_store, "load", lambda *a, **k: stand_in.copy())
     for name in ("RESULTS_DIR", "PREDICTIONS_DIR", "MODELS_DIR"):
@@ -72,3 +76,7 @@ def test_final_test_runs_end_to_end_on_stand_in_data(tmp_path, monkeypatch):
     assert (forecasts["prediction"] >= 0).all() and set(forecasts["data_mode"]) == {"test"}
     assert (tmp_path / "RESULTS_DIR" / "holdout_metrics.json").exists()
     assert (tmp_path / "MODELS_DIR" / "lightgbm-v1_final" / "model.txt").exists()
+    assert len(result["commit"]) == 40
+    comparison = pd.read_csv(tmp_path / "RESULTS_DIR" / "holdout_comparison_200.csv")
+    assert comparison["model"].tolist() == ["lightgbm (all stations)", "seasonal_naive", "historical_mean"]
+    assert (comparison["n"] == observed).all()  # every model scored on the same rows
