@@ -66,12 +66,29 @@ uv run pytest                                        # tests, including checks o
 
 Steps: `download`, `load`, `aggregate`, `calendar`, `stations`, `cohort`, `grid`, `weather`, `export`, `report` (`all` runs them in this order; `verify` only checks downloaded release files). Each step skips outputs that already exist; `--force` rebuilds them. The code after the tag `data-v1` contains corrections (see `docs/decisions.md`, E15); `git checkout data-v1` rebuilds the release exactly. `scripts/publish_release.sh` uploads the release files.
 
+## Modelling
+
+Day-ahead forecasts of hourly pickups per station, evaluated on four rolling-origin folds inside the dev period (`src/pedalpulse/folds.py`). The holdout stays locked until the final test. Results go to `reports/results/`, forecasts to `data/predictions/`, saved models to `data/models/` (all ignored by git).
+
+```bash
+uv run python -m pedalpulse.evaluate --stations 200 --models seasonal_naive historical_mean poisson random_forest lightgbm
+uv run python -m pedalpulse.feature_store                                  # features for all 2,072 stations (once, about 0.5 GB)
+uv run python -m pedalpulse.evaluate --full --models lightgbm --folds f4 --save-predictions
+uv run python -m pedalpulse.tune --model lightgbm --trials 12 --stations 200
+uv run python -m pedalpulse.experiments                                    # forecast origin and weather
+uv run python -m pedalpulse.analysis                                       # error analysis, figures 12 and 13
+uv run python -m pedalpulse.final_test --unlock                            # only once, after the team review
+```
+
+`--stations 200` is a fixed random sample of the cohort (seed 19); `--full` trains on all stations from the feature store and needs about 9 GB of memory. Forecast files follow [`docs/forecast_contract.md`](docs/forecast_contract.md).
+
 ## Documentation
 
 - [`docs/data_contract.md`](docs/data_contract.md): tables, columns, time convention, status rules
 - [`docs/decisions.md`](docs/decisions.md): data decisions with reasons
 - [`docs/data_report.md`](docs/data_report.md): data quality report with the numbers of the run
 - [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb): exploratory analysis on the dev file; figures in `reports/figures/`
+- [`docs/forecast_contract.md`](docs/forecast_contract.md): format of the forecast files for the dashboard
 - [`docs/genai_log.md`](docs/genai_log.md): use of generative AI
 
 ## Licence
